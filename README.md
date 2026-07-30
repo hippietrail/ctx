@@ -1,4 +1,6 @@
-"cngd" stands for "contextual n-gram differencer" that Google Search's AI spontaneously called it when I proposed the idea.
+## **ctx**
+
+(formerly "cngd", for "contextual n-gram differencer")
 
 ## Purpose
 
