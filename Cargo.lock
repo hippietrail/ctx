@@ -788,17 +788,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cngd"
-version = "0.1.0"
-dependencies = [
- "harper-core",
- "reqwest 0.13.4",
- "serde",
- "serde_json",
- "url",
-]
-
-[[package]]
 name = "codespan-reporting"
 version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1021,6 +1010,17 @@ dependencies = [
  "dtoa-short",
  "itoa",
  "smallvec",
+]
+
+[[package]]
+name = "ctx"
+version = "0.1.0"
+dependencies = [
+ "harper-core",
+ "reqwest 0.13.4",
+ "serde",
+ "serde_json",
+ "url",
 ]
 
 [[package]]
