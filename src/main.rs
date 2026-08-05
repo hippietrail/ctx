@@ -40,7 +40,7 @@
 // ============================================================================
 
 // Local modules
-mod google_ngram_viewer;
+mod google_ngrams;
 // Part-of-speech
 mod pos;
 
@@ -58,12 +58,21 @@ use itertools::Itertools;
 use owo_colors::{FgDynColorDisplay, OwoColorize, Rgb};
 
 // Local modules
-use google_ngram_viewer::{
-    Row, Side,
-    Side::{After, Before},
-    build_url, fetch_json, parse_items,
-};
 use pos::Pos;
+
+/// Represents which side of the target word a context appears on
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord)]
+enum Side {
+    Before,
+    After,
+}
+use Side::*;
+
+struct Row {
+    pub side: Side,
+    pub alt: String,
+    pub ctx: String,
+}
 
 // ============================================================================
 // COLOR UTILITIES
@@ -209,7 +218,7 @@ pub fn cli() -> Result<Cfg, Box<dyn std::error::Error>> {
                     let y = y.as_bytes();
                     Some([y[0] as char, y[1] as char, y[2] as char, y[3] as char])
                 }
-                _ => return Err(format!("Year must be exactly 4 digits").into()),
+                _ => return Err("Year must be exactly 4 digits".into()),
             };
         } else if arg.starts_with('-') {
             return Err(format!("Unknown option: {}", arg).into());
@@ -338,7 +347,7 @@ fn get_poses(dict: &FstDictionary, word: &str) -> Vec<&'static Pos> {
 /// TODO: Consider adding a threshold for minimum frequency to filter noise
 fn evaluate_contexts<'a>(
     cfg: &'a Cfg,
-    table: &[Row<'a>],
+    table: &'a [Row],
 ) -> HashMap<Collocation<'a>, Vec<ContextWord<'a>>> {
     let mut results: HashMap<Collocation<'_>, Vec<ContextWord<'_>>> = HashMap::new();
 
@@ -350,7 +359,7 @@ fn evaluate_contexts<'a>(
                 .filter(|r| {
                     r.side == row.side
                         && r.alt != alternative.jfmt
-                        && same_family(cfg, r.alt, alternative.fam.as_deref())
+                        && same_family(cfg, &r.alt, alternative.fam.as_deref())
                 })
                 .collect();
 
@@ -372,11 +381,11 @@ fn evaluate_contexts<'a>(
 
             match match_kind {
                 NoMatch => results.entry(coll).or_default().push(ContextWord {
-                    word: row.ctx,
+                    word: &row.ctx,
                     case_sensitive: false,
                 }),
                 Normalized => results.entry(coll).or_default().push(ContextWord {
-                    word: row.ctx,
+                    word: &row.ctx,
                     case_sensitive: true,
                 }),
                 Exact => {} // Discarded from standard uniqueness lists
@@ -408,8 +417,8 @@ fn print_raw_diagnostics(cfg: &Cfg, table: &[Row], dict: &FstDictionary) {
         println!(
             "{}•{}{}",
             if i == 0 { "" } else { "\n" },
-            if var.fam.is_some() {
-                format!("{}:", var.fam.as_ref().unwrap())
+            if let Some(fam) = &var.fam {
+                format!("{}:", fam)
             } else {
                 String::new()
             },
@@ -420,14 +429,14 @@ fn print_raw_diagnostics(cfg: &Cfg, table: &[Row], dict: &FstDictionary) {
             .iter()
             .filter(|r| r.alt == var.jfmt && r.side == Before)
             .sorted_by_key(|r| r.ctx.to_ascii_lowercase())
-            .map(|r| r.ctx)
+            .map(|r| &r.ctx)
             .unique()
             .collect();
         let after_words: Vec<_> = table
             .iter()
             .filter(|r| r.alt == var.jfmt && r.side == After)
             .sorted_by_key(|r| r.ctx.to_ascii_lowercase())
-            .map(|r| r.ctx)
+            .map(|r| &r.ctx)
             .unique()
             .collect();
 
@@ -502,7 +511,7 @@ fn print_uniq_to(
         table
             .iter()
             .filter(|r| r.alt == target_jfmt && r.side == side)
-            .flat_map(|r| get_poses(dict, r.ctx))
+            .flat_map(|r| get_poses(dict, &r.ctx))
             .collect()
     };
 
@@ -510,8 +519,8 @@ fn print_uniq_to(
     let other_poses_by_side = |side: Side| -> HashSet<&'static Pos> {
         table
             .iter()
-            .filter(|r| r.alt != target_jfmt && r.side == side && same_family(cfg, r.alt, fam))
-            .flat_map(|r| get_poses(dict, r.ctx))
+            .filter(|r| r.alt != target_jfmt && r.side == side && same_family(cfg, &r.alt, fam))
+            .flat_map(|r| get_poses(dict, &r.ctx))
             .collect()
     };
 
@@ -586,9 +595,9 @@ fn print_prohibited(cfg: &Cfg, table: &[Row], dict: &FstDictionary, alt: &str, f
 
     let context_counts = table
         .iter()
-        .filter(|r| r.alt != target_jfmt && same_family(cfg, r.alt, fam))
+        .filter(|r| r.alt != target_jfmt && same_family(cfg, &r.alt, fam))
         .fold(HashMap::new(), |mut acc, r| {
-            *acc.entry((r.side, r.ctx)).or_insert(0) += 1;
+            *acc.entry((r.side, &r.ctx)).or_insert(0) += 1;
             acc
         });
 
@@ -596,11 +605,11 @@ fn print_prohibited(cfg: &Cfg, table: &[Row], dict: &FstDictionary, alt: &str, f
         if count == other_count
             && !table
                 .iter()
-                .any(|r| r.alt == target_jfmt && r.side == side && r.ctx == ctx)
+                .any(|r| r.alt == target_jfmt && r.side == side && &r.ctx == ctx)
         {
             match side {
-                Before => prohib_pre_words.push(ctx),
-                After => prohib_post_words.push(ctx),
+                Before => prohib_pre_words.push(ctx.clone()),
+                After => prohib_post_words.push(ctx.clone()),
             }
         }
     }
@@ -612,9 +621,9 @@ fn print_prohibited(cfg: &Cfg, table: &[Row], dict: &FstDictionary, alt: &str, f
         // Calculate prohibited POS: POS that appear in ALL other alternatives but NOT in current
         let pos_counts = table
             .iter()
-            .filter(|r| r.alt != target_jfmt && same_family(cfg, r.alt, fam))
+            .filter(|r| r.alt != target_jfmt && same_family(cfg, &r.alt, fam))
             .fold(HashMap::new(), |mut acc, r| {
-                for pos in get_poses(dict, r.ctx) {
+                for pos in get_poses(dict, &r.ctx) {
                     *acc.entry((r.side, pos)).or_insert(0) += 1;
                 }
                 acc
@@ -630,7 +639,7 @@ fn print_prohibited(cfg: &Cfg, table: &[Row], dict: &FstDictionary, alt: &str, f
                     !table
                         .iter()
                         .filter(|r| r.alt == target_jfmt && r.side == side)
-                        .any(|r| get_poses(dict, r.ctx).contains(pos))
+                        .any(|r| get_poses(dict, &r.ctx).contains(pos))
                 })
                 .unique()
                 .sorted_by_key(|p| pos::pos_info(p).ord)
@@ -720,7 +729,7 @@ fn print_family_uniqueness(
             .entry(row.side)
             .or_default();
 
-        for pos in get_poses(dict, row.ctx) {
+        for pos in get_poses(dict, &row.ctx) {
             pos_map.insert(pos);
         }
     }
@@ -775,16 +784,17 @@ fn print_family_uniqueness(
         if let Some(fam_pos) = family_poses.get(fam) {
             if let Some(this_before_pos) = fam_pos.get(&Before) {
                 for pos in this_before_pos {
-                    let is_unique = families
-                        .iter()
-                        .filter(|other_fam| *other_fam != fam)
-                        .all(|other_fam| {
-                            family_poses
-                                .get(other_fam)
-                                .and_then(|ps| ps.get(&Before))
-                                .map(|ob| !ob.contains(pos))
-                                .unwrap_or(true)
-                        });
+                    let is_unique =
+                        families
+                            .iter()
+                            .filter(|other_fam| *other_fam != fam)
+                            .all(|other_fam| {
+                                family_poses
+                                    .get(other_fam)
+                                    .and_then(|ps| ps.get(&Before))
+                                    .map(|ob| !ob.contains(pos))
+                                    .unwrap_or(true)
+                            });
                     if is_unique {
                         before_pos_unique.insert(*pos);
                     }
@@ -792,16 +802,17 @@ fn print_family_uniqueness(
             }
             if let Some(this_after_pos) = fam_pos.get(&After) {
                 for pos in this_after_pos {
-                    let is_unique = families
-                        .iter()
-                        .filter(|other_fam| *other_fam != fam)
-                        .all(|other_fam| {
-                            family_poses
-                                .get(other_fam)
-                                .and_then(|ps| ps.get(&After))
-                                .map(|oa| !oa.contains(pos))
-                                .unwrap_or(true)
-                        });
+                    let is_unique =
+                        families
+                            .iter()
+                            .filter(|other_fam| *other_fam != fam)
+                            .all(|other_fam| {
+                                family_poses
+                                    .get(other_fam)
+                                    .and_then(|ps| ps.get(&After))
+                                    .map(|oa| !oa.contains(pos))
+                                    .unwrap_or(true)
+                            });
                     if is_unique {
                         after_pos_unique.insert(*pos);
                     }
@@ -830,25 +841,23 @@ fn print_family_uniqueness(
                 .iter()
                 .sorted_by_key(|pos| pos::pos_info(pos).ord)
                 .enumerate()
-                .map(|(i, pos)| {
-                    format!("\x1b[{}m{}\x1b[0m", 33 + i % 2, pos::pos_info(pos).letter)
-                })
+                .map(|(i, pos)| format!("\x1b[{}m{}\x1b[0m", 33 + i % 2, pos::pos_info(pos).letter))
                 .join("")
         }
 
-        print!(
-            "{} \x1b[0;1m{}\x1b[0m {}\x1b[0m\x1b[K\n",
+        println!(
+            "{} \x1b[0;1m«{}»\x1b[0m {}\x1b[0m\x1b[K",
             format_contexts(&before_unique).join(" "),
-            format!("«{}»", fam.unwrap_or("None")),
+            fam.unwrap_or("None"),
             format_contexts(&after_unique).join(" ")
         );
 
         // Print POS discriminators if any
         if !before_pos_unique.is_empty() || !after_pos_unique.is_empty() {
-            print!(
-                "{} \x1b[0;1m{}\x1b[0m {}\x1b[0m\x1b[K\n",
+            println!(
+                "{} \x1b[0;1m«{}»\x1b[0m {}\x1b[0m\x1b[K",
                 format_poses(&before_pos_unique),
-                format!("«{}»", fam.unwrap_or("None")),
+                fam.unwrap_or("None"),
                 format_poses(&after_pos_unique)
             );
         }
@@ -877,14 +886,9 @@ fn print_family_uniqueness(
 /// TODO: The main function is getting long - consider extracting phases
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cfg = cli()?;
-    let url = build_url(&cfg);
-    let mut graph_url = url.clone();
-    graph_url.path_segments_mut().unwrap().pop().push("graph");
-    println!("ℹ️ URL: {}", graph_url);
 
-    let json_val = fetch_json(url)?;
-    let items: Vec<google_ngram_viewer::NgramItem> = serde_json::from_value(json_val)?;
-    let table = parse_items(&items)?;
+    let table = google_ngrams::fetch_google_ngrams(&cfg)?;
+
     let dict = FstDictionary::curated();
 
     if cfg.raw {
@@ -897,7 +901,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .sorted_by(|a, b| {
             a.fam
                 .cmp(&b.fam)
-                .then(a.alt.cmp(&b.alt))
+                .then(a.alt.cmp(b.alt))
                 .then(a.side.cmp(&b.side))
         });
 
@@ -912,14 +916,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let (fam, alt) = fam_alt;
 
-        print_uniq_to(
-            fam,
-            &side_cwords_pair,
-            &dict,
-            alt,
-            &cfg,
-            &table,
-        );
+        print_uniq_to(fam, &side_cwords_pair, &dict, alt, &cfg, &table);
 
         print_prohibited(&cfg, &table, &dict, alt, fam);
     }

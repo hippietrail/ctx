@@ -40,24 +40,6 @@ enum NgramType {
     Ngram,
 }
 
-/// Represents which side of the target word a context appears on
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord)]
-pub enum Side {
-    Before,
-    After,
-}
-use Side::*;
-
-/// A parsed row from the ngram data
-/// - `side`: Whether this context appears before or after the target
-/// - `alt`: The alternative word this context belongs to
-/// - `ctx`: The context word itself
-pub struct Row<'a> {
-    pub side: Side,
-    pub alt: &'a str,
-    pub ctx: &'a str,
-}
-
 // ============================================================================
 // URL BUILDING AND API FETCHING
 // ============================================================================
@@ -120,20 +102,16 @@ pub fn fetch_json(url: url::Url) -> Result<serde_json::Value, Box<dyn std::error
 // DATA PARSING
 // ============================================================================
 
-/// Parses NgramItem data into a structured table of context rows
+/// Parses Google Ngram items directly into the application's general Row format
 ///
-/// Filters for Expansion type ngrams and extracts the context words
-/// that appear before or after each alternative.
+/// Filters out non-expansion ngrams and isolates the context words appearing
+/// before or after each alternative phrase.
 ///
-/// Returns a vector of Row structs containing:
-/// - The side (Before/After)
-/// - The alternative word
-/// - The context word
-///
-/// TODO: Add better error messages for parsing failures
-/// TODO: Consider handling edge cases like empty ngrams
-pub fn parse_items<'a>(items: &'a [NgramItem]) -> Result<Vec<Row<'a>>, Box<dyn std::error::Error>> {
-    let mut table = Vec::<Row>::new();
+/// # Returns
+/// A vector of general `crate::Row` structs containing the side, alternative,
+/// and context data.
+fn parse(items: Vec<NgramItem>) -> Result<Vec<crate::Row>, Box<dyn std::error::Error>> {
+    let mut table = Vec::<crate::Row>::new();
 
     for item in items {
         if item.kind != NgramType::Expansion {
@@ -158,15 +136,26 @@ pub fn parse_items<'a>(items: &'a [NgramItem]) -> Result<Vec<Row<'a>>, Box<dyn s
             false => &item.ngram[alternative.len() + 1..],
         };
 
-        table.push(Row {
+        table.push(crate::Row {
             side: match is_prefix {
-                true => Before,
-                false => After,
+                true => crate::Before,
+                false => crate::After,
             },
-            alt: alternative,
-            ctx: context,
+            alt: alternative.to_string(),
+            ctx: context.to_string(),
         });
     }
 
     Ok(table)
+}
+
+pub fn fetch_google_ngrams(cfg: &Cfg) -> Result<Vec<crate::Row>, Box<dyn std::error::Error>> {
+    let url = build_url(cfg);
+    let mut graph_url = url.clone();
+    graph_url.path_segments_mut().unwrap().pop().push("graph");
+    println!("ℹ️ URL: {}", graph_url);
+
+    let json_value = fetch_json(url)?;
+
+    parse(serde_json::from_value(json_value)?)
 }
