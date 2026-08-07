@@ -144,14 +144,14 @@ use ContextMatch::*;
 /// Represents the combination of an alternative word, which side (Before/After),
 /// and optionally a family grouping. Used as a key in the results HashMap to
 /// organize unique context words by their collocation context.
-#[derive(Eq, Hash, PartialEq, Clone, Copy)]
-struct Collocation<'a> {
-    fam: Option<&'a str>,
-    alt: &'a str,
+#[derive(Eq, Hash, PartialEq, Clone)]
+struct Collocation {
+    fam: Option<String>,
+    alt: String,
     side: Side,
 }
 
-impl Display for Collocation<'_> {
+impl Display for Collocation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.fam {
             Some(fam) => write!(f, "{}({:?})[{}]", self.alt, self.side, fam),
@@ -165,8 +165,9 @@ impl Display for Collocation<'_> {
 /// - `word`: The context word that appears near an alternative
 /// - `case_sensitive`: If true, this word is unique only when considering case
 ///   sensitivity (e.g., "The" vs "the"). The DAGGER (†) symbol marks these in output.
-struct ContextWord<'a> {
-    word: &'a str,
+#[derive(Eq, Hash, PartialEq)]
+struct ContextWord {
+    word: String,
     case_sensitive: bool,
 }
 
@@ -345,11 +346,11 @@ fn get_poses(dict: &FstDictionary, word: &str) -> Vec<&'static Pos> {
 ///
 /// TODO: This is O(n²) complexity - could be optimized with better data structures
 /// TODO: Consider adding a threshold for minimum frequency to filter noise
-fn evaluate_contexts<'a>(
-    cfg: &'a Cfg,
-    table: &'a [Row],
-) -> HashMap<Collocation<'a>, Vec<ContextWord<'a>>> {
-    let mut results: HashMap<Collocation<'_>, Vec<ContextWord<'_>>> = HashMap::new();
+fn evaluate_contexts(
+    cfg: &Cfg,
+    table: &[Row],
+) -> HashMap<Collocation, Vec<ContextWord>> {
+    let mut results: HashMap<Collocation, HashSet<ContextWord>> = HashMap::new();
 
     for alternative in &cfg.alternatives {
         for row in table.iter().filter(|r| r.alt == alternative.jfmt) {
@@ -374,26 +375,34 @@ fn evaluate_contexts<'a>(
             }
 
             let coll = Collocation {
-                alt: &alternative.raw,
+                alt: alternative.raw.clone(),
                 side: row.side,
-                fam: alternative.fam.as_deref(),
+                fam: alternative.fam.clone(),
             };
 
             match match_kind {
-                NoMatch => results.entry(coll).or_default().push(ContextWord {
-                    word: &row.ctx,
-                    case_sensitive: false,
-                }),
-                Normalized => results.entry(coll).or_default().push(ContextWord {
-                    word: &row.ctx,
-                    case_sensitive: true,
-                }),
+                NoMatch => {
+                    results.entry(coll).or_default().insert(ContextWord {
+                        word: row.ctx.clone(),
+                        case_sensitive: false,
+                    });
+                }
+                Normalized => {
+                    results.entry(coll).or_default().insert(ContextWord {
+                        word: row.ctx.clone(),
+                        case_sensitive: true,
+                    });
+                }
                 Exact => {} // Discarded from standard uniqueness lists
             }
         }
     }
 
+    // Convert HashSets to Vecs for output
     results
+        .into_iter()
+        .map(|(k, v)| (k, v.into_iter().collect()))
+        .collect()
 }
 
 // ============================================================================
@@ -572,7 +581,7 @@ fn print_uniq_to(
 /// then "house" is a prohibited context for "stake".
 ///
 /// TODO: Consider adding a confidence score based on frequency
-fn print_prohibited(cfg: &Cfg, table: &[Row], dict: &FstDictionary, alt: &str, fam: Option<&str>) {
+fn print_prohibited(cfg: &Cfg, table: &[Row], dict: &FstDictionary, alt: &String, fam: Option<&str>) {
     if cfg.alternatives.len() <= 2 {
         return;
     }
@@ -684,14 +693,13 @@ fn print_prohibited(cfg: &Cfg, table: &[Row], dict: &FstDictionary, alt: &str, f
 fn print_family_uniqueness(
     results: &HashMap<Collocation, Vec<ContextWord>>,
     dict: &FstDictionary,
-    table: &[Row],
 ) {
-    let mut family_contexts: HashMap<Option<&str>, HashMap<Side, HashMap<&str, ContextMatch>>> =
+    let mut family_contexts: HashMap<Option<String>, HashMap<Side, HashMap<String, ContextMatch>>> =
         HashMap::new();
 
     for (collocation, context_words) in results {
         let side_map = family_contexts
-            .entry(collocation.fam)
+            .entry(collocation.fam.as_deref().map(|s| s.to_string()))
             .or_default()
             .entry(collocation.side)
             .or_default();
@@ -703,34 +711,13 @@ fn print_family_uniqueness(
                 NoMatch
             };
             side_map
-                .entry(cw.word)
+                .entry(cw.word.clone())
                 .and_modify(|existing| {
                     if *existing == Normalized && match_kind == NoMatch {
                         *existing = NoMatch;
                     }
                 })
                 .or_insert(match_kind);
-        }
-    }
-
-    // Calculate POS from raw table data (not filtered results)
-    let mut family_poses: HashMap<Option<&str>, HashMap<Side, HashSet<&'static Pos>>> =
-        HashMap::new();
-
-    for row in table {
-        let fam = results
-            .keys()
-            .find(|k| k.alt == row.alt && k.side == row.side)
-            .and_then(|k| k.fam);
-
-        let pos_map = family_poses
-            .entry(fam)
-            .or_default()
-            .entry(row.side)
-            .or_default();
-
-        for pos in get_poses(dict, &row.ctx) {
-            pos_map.insert(pos);
         }
     }
 
@@ -778,49 +765,72 @@ fn print_family_uniqueness(
                     }
                 }
             }
-        }
 
-        // Calculate unique POS for this family
-        if let Some(fam_pos) = family_poses.get(fam) {
-            if let Some(this_before_pos) = fam_pos.get(&Before) {
-                for pos in this_before_pos {
-                    let is_unique =
-                        families
-                            .iter()
-                            .filter(|other_fam| *other_fam != fam)
-                            .all(|other_fam| {
-                                family_poses
-                                    .get(other_fam)
-                                    .and_then(|ps| ps.get(&Before))
-                                    .map(|ob| !ob.contains(pos))
-                                    .unwrap_or(true)
-                            });
-                    if is_unique {
-                        before_pos_unique.insert(*pos);
+            // Calculate POS from unique context words only
+            for ctx in before_unique.keys() {
+                for pos in get_poses(dict, ctx) {
+                    before_pos_unique.insert(pos);
+                }
+            }
+            for ctx in after_unique.keys() {
+                for pos in get_poses(dict, ctx) {
+                    after_pos_unique.insert(pos);
+                }
+            }
+
+            // Filter POS to only those unique to this family
+            let mut all_before_pos: HashSet<&'static Pos> = HashSet::new();
+            let mut all_after_pos: HashSet<&'static Pos> = HashSet::new();
+
+            for other_fam in families.iter().filter(|f| *f != fam) {
+                if let Some(other_ctx) = family_contexts.get(other_fam) {
+                    // Only collect POS from UNIQUE context words in other families
+                    if let Some(other_before) = other_ctx.get(&Before) {
+                        for (ctx, _) in other_before {
+                            let is_unique = families
+                                .iter()
+                                .filter(|of| *of != other_fam)
+                                .all(|of| {
+                                    family_contexts
+                                        .get(of)
+                                        .and_then(|ctxs| ctxs.get(&Before))
+                                        .map(|ob| !ob.contains_key(ctx))
+                                        .unwrap_or(true)
+                                });
+                            if is_unique {
+                                for pos in get_poses(dict, ctx) {
+                                    all_before_pos.insert(pos);
+                                }
+                            }
+                        }
+                    }
+                    if let Some(other_after) = other_ctx.get(&After) {
+                        for (ctx, _) in other_after {
+                            let is_unique = families
+                                .iter()
+                                .filter(|of| *of != other_fam)
+                                .all(|of| {
+                                    family_contexts
+                                        .get(of)
+                                        .and_then(|ctxs| ctxs.get(&After))
+                                        .map(|oa| !oa.contains_key(ctx))
+                                        .unwrap_or(true)
+                                });
+                            if is_unique {
+                                for pos in get_poses(dict, ctx) {
+                                    all_after_pos.insert(pos);
+                                }
+                            }
+                        }
                     }
                 }
             }
-            if let Some(this_after_pos) = fam_pos.get(&After) {
-                for pos in this_after_pos {
-                    let is_unique =
-                        families
-                            .iter()
-                            .filter(|other_fam| *other_fam != fam)
-                            .all(|other_fam| {
-                                family_poses
-                                    .get(other_fam)
-                                    .and_then(|ps| ps.get(&After))
-                                    .map(|oa| !oa.contains(pos))
-                                    .unwrap_or(true)
-                            });
-                    if is_unique {
-                        after_pos_unique.insert(*pos);
-                    }
-                }
-            }
+
+            before_pos_unique.retain(|p| !all_before_pos.contains(p));
+            after_pos_unique.retain(|p| !all_after_pos.contains(p));
         }
 
-        fn format_contexts(contexts: &HashMap<&&str, ContextMatch>) -> Vec<String> {
+        fn format_contexts(contexts: &HashMap<&String, ContextMatch>) -> Vec<String> {
             contexts
                 .iter()
                 .sorted_by_key(|(s, _)| s.to_lowercase())
@@ -848,7 +858,7 @@ fn print_family_uniqueness(
         println!(
             "{} \x1b[0;1m«{}»\x1b[0m {}\x1b[0m\x1b[K",
             format_contexts(&before_unique).join(" "),
-            fam.unwrap_or("None"),
+            fam.as_deref().unwrap_or("None"),
             format_contexts(&after_unique).join(" ")
         );
 
@@ -857,7 +867,7 @@ fn print_family_uniqueness(
             println!(
                 "{} \x1b[0;1m«{}»\x1b[0m {}\x1b[0m\x1b[K",
                 format_poses(&before_pos_unique),
-                fam.unwrap_or("None"),
+                fam.as_deref().unwrap_or("None"),
                 format_poses(&after_pos_unique)
             );
         }
@@ -900,12 +910,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .keys() //.collect::<Vec<_>>();
         .sorted_by(|a, b| {
             a.fam
-                .cmp(&b.fam)
-                .then(a.alt.cmp(b.alt))
+                .as_ref()
+                .cmp(&b.fam.as_ref())
+                .then(a.alt.cmp(&b.alt))
                 .then(a.side.cmp(&b.side))
         });
 
-    for (fam_alt, gr) in &keys.into_iter().chunk_by(|k| (k.fam, k.alt)) {
+    for (fam_alt, gr) in &keys.into_iter().chunk_by(|k| (k.fam.clone(), k.alt.clone())) {
         let mut side_cwords_pair = Vec::new();
 
         for colloc in gr {
@@ -916,14 +927,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let (fam, alt) = fam_alt;
 
-        print_uniq_to(fam, &side_cwords_pair, &dict, alt, &cfg, &table);
+        print_uniq_to(fam.as_deref(), &side_cwords_pair, &dict, &alt, &cfg, &table);
 
-        print_prohibited(&cfg, &table, &dict, alt, fam);
+        print_prohibited(&cfg, &table, &dict, &alt, fam.as_deref());
     }
 
     if cfg.has_families {
         println!();
-        print_family_uniqueness(&results, &dict, &table);
+        print_family_uniqueness(&results, &dict);
     }
 
     Ok(())
