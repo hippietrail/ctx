@@ -40,6 +40,7 @@
 // ============================================================================
 
 // Local modules
+mod colour;
 mod google_ngrams;
 // Part-of-speech
 mod pos;
@@ -48,56 +49,32 @@ mod pos;
 use std::{
     collections::{HashMap, HashSet},
     env,
-    fmt::Display,
+    ops::{Deref, DerefMut},
     vec::Vec,
 };
 
 // External crates
 use harper_core::spell::{Dictionary, FstDictionary};
 use itertools::Itertools;
-use owo_colors::{FgDynColorDisplay, OwoColorize, Rgb};
 
 // Local modules
+use colour::{Colour, CYAN, GREEN, MAGENTA, ORANGE, RED, YELLOW};
 use pos::Pos;
 
 /// Represents which side of the target word a context appears on
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord)]
-enum Side {
+pub enum Side {
     Before,
     After,
 }
 use Side::*;
 
+#[derive(Debug)]
 struct Row {
-    pub side: Side,
-    pub alt: String,
-    pub ctx: String,
-}
-
-// ============================================================================
-// COLOR UTILITIES
-// ============================================================================
-
-/// Shorthand trait for truecolor formatting
-///
-/// Provides a shorter `.tc()` method as an alias for `.truecolor()` from owo_colors.
-/// This reduces verbosity when specifying RGB colors for terminal output.
-///
-/// Example:
-/// ```rust
-/// "text".tc(255, 0, 0)  // Red text
-/// "text".tc(0, 255, 0)  // Green text
-/// ```
-pub trait ShortColor {
-    fn tc(&self, r: u8, g: u8, b: u8) -> FgDynColorDisplay<'_, Rgb, Self>;
-}
-
-// Implement it for all types that already implement OwoColorize
-impl<T: OwoColorize> ShortColor for T {
-    #[inline(always)]
-    fn tc(&self, r: u8, g: u8, b: u8) -> FgDynColorDisplay<'_, Rgb, Self> {
-        self.truecolor(r, g, b)
-    }
+    pub fam: Option<String>, // For grouping alternatives together
+    pub alt: String,         // An individual word or phrase being compared against others
+    pub side: Side, // Does this row contain the context words before the 'alternative' or after?
+    pub ctx: String, // A single context word that frequently appears right before or right after this 'alternative'.
 }
 
 // ============================================================================
@@ -125,50 +102,6 @@ pub struct Cfg {
     pub alternatives: Vec<Alternative>,
     pub has_families: bool,
     pub since_year: Option<[char; 4]>,
-}
-
-/// How well a context word matches across alternatives
-/// - `Exact`: Identical string match (shared context, not unique)
-/// - `Normalized`: Case-insensitive match (unique only with case sensitivity)
-/// - `NoMatch`: No match across alternatives (truly unique context)
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum ContextMatch {
-    Exact,
-    Normalized,
-    NoMatch,
-}
-use ContextMatch::*;
-
-/// A collocation: a specific alternative with its side and optional family
-///
-/// Represents the combination of an alternative word, which side (Before/After),
-/// and optionally a family grouping. Used as a key in the results HashMap to
-/// organize unique context words by their collocation context.
-#[derive(Eq, Hash, PartialEq, Clone)]
-struct Collocation {
-    fam: Option<String>,
-    alt: String,
-    side: Side,
-}
-
-impl Display for Collocation {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self.fam {
-            Some(fam) => write!(f, "{}({:?})[{}]", self.alt, self.side, fam),
-            None => write!(f, "{}({:?})", self.alt, self.side),
-        }
-    }
-}
-
-/// A context word with its case-sensitivity flag
-///
-/// - `word`: The context word that appears near an alternative
-/// - `case_sensitive`: If true, this word is unique only when considering case
-///   sensitivity (e.g., "The" vs "the"). The DAGGER (†) symbol marks these in output.
-#[derive(Eq, Hash, PartialEq)]
-struct ContextWord {
-    word: String,
-    case_sensitive: bool,
 }
 
 // ============================================================================
@@ -208,6 +141,13 @@ pub fn cli() -> Result<Cfg, Box<dyn std::error::Error>> {
                 None | Some("") => None,
                 Some(s) => Some(s.to_string()),
             };
+            if cfg.debug {
+                if let Some(f) = &family {
+                    println!("👉Family: {}", f);
+                } else {
+                    unreachable!()
+                }
+            }
             cfg.has_families = true;
         } else if let Some(prefix) = ["--since=", "--since-year="]
             .into_iter()
@@ -228,7 +168,6 @@ pub fn cli() -> Result<Cfg, Box<dyn std::error::Error>> {
             // NOTE: See also the special handling for apostrophes in google_ngram_viewer.rs/build_url()
             cfg.alternatives.push(Alternative {
                 raw: arg.clone(),
-                // jfmt: arg.split('-').intersperse(" - ").collect(),
                 jfmt: arg.split('-').join(" - "),
                 fam: family.clone(),
             });
@@ -255,6 +194,13 @@ pub fn cli() -> Result<Cfg, Box<dyn std::error::Error>> {
             });
         } else {
             // Simple words: use as-is
+            if cfg.debug {
+                if let Some(family) = &family {
+                    println!("👉Word: {}::{}", family, arg);
+                } else {
+                    println!("👉Word: {}", arg);
+                }
+            }
             cfg.alternatives.push(Alternative {
                 raw: arg.clone(),
                 jfmt: arg.clone(),
@@ -263,49 +209,16 @@ pub fn cli() -> Result<Cfg, Box<dyn std::error::Error>> {
         }
     }
 
+    // --- POST-PARSING NORMALIZATION ---
+    if !cfg.has_families {
+        // If no families were specified anywhere on the CLI,
+        // the family can just copy the raw alternative.
+        for alt in cfg.alternatives.iter_mut() {
+            alt.fam = Some(alt.raw.clone());
+        }
+    }
+
     Ok(cfg)
-}
-
-// ============================================================================
-// HELPER FUNCTIONS
-// ============================================================================
-
-/// Checks if a row belongs to the same family as the target alternative
-/// Used for filtering when family grouping is enabled
-fn same_family(cfg: &Cfg, row_alt: &str, target_fam: Option<&str>) -> bool {
-    !cfg.has_families
-        || cfg
-            .alternatives
-            .iter()
-            .find(|a| a.jfmt == row_alt)
-            .map(|a| a.fam.as_deref() == target_fam)
-            .unwrap_or(false)
-}
-
-/// Gets the formatted (jfmt) version of an alternative by its raw name
-fn get_jfmt<'a>(cfg: &'a Cfg, alt: &str) -> &'a str {
-    cfg.alternatives
-        .iter()
-        .find(|a| a.raw == alt)
-        .map(|a| a.jfmt.as_str())
-        .unwrap()
-}
-
-/// Formats context words with alternating colors and case-sensitive marker
-fn format_context_words(words: &[ContextWord]) -> String {
-    words
-        .iter()
-        .sorted_by_key(|cw| cw.word.to_lowercase())
-        .enumerate()
-        .map(|(i, cw)| {
-            format!(
-                "\x1b[{}m{}\x1b[0m{}",
-                31 + (i % 2),
-                cw.word,
-                if cw.case_sensitive { "†" } else { "" }
-            )
-        })
-        .join(" ")
 }
 
 // ============================================================================
@@ -328,550 +241,6 @@ fn get_poses(dict: &FstDictionary, word: &str) -> Vec<&'static Pos> {
                 .map(|(enum_variant, _)| enum_variant)
                 .collect()
         })
-}
-
-// ============================================================================
-// CONTEXT EVALUATION
-// ============================================================================
-
-/// Evaluates context words across alternatives to find unique contexts
-///
-/// For each alternative, compares its context words with other alternatives
-/// to determine uniqueness:
-/// - NoMatch: Context appears only with this alternative (truly unique)
-/// - Normalized: Context appears with different case (unique with case sensitivity)
-/// - Exact: Context appears identically across alternatives (not unique, discarded)
-///
-/// When families are enabled, comparisons are limited to alternatives within the same family.
-///
-/// TODO: This is O(n²) complexity - could be optimized with better data structures
-/// TODO: Consider adding a threshold for minimum frequency to filter noise
-fn evaluate_contexts(
-    cfg: &Cfg,
-    table: &[Row],
-) -> HashMap<Collocation, Vec<ContextWord>> {
-    let mut results: HashMap<Collocation, HashSet<ContextWord>> = HashMap::new();
-
-    for alternative in &cfg.alternatives {
-        for row in table.iter().filter(|r| r.alt == alternative.jfmt) {
-            // Check matches across other alternatives
-            let matching_rows: Vec<&Row> = table
-                .iter()
-                .filter(|r| {
-                    r.side == row.side
-                        && r.alt != alternative.jfmt
-                        && same_family(cfg, &r.alt, alternative.fam.as_deref())
-                })
-                .collect();
-
-            let mut match_kind = NoMatch;
-            for other in matching_rows {
-                if other.ctx == row.ctx {
-                    match_kind = Exact;
-                    break;
-                } else if other.ctx.to_lowercase() == row.ctx.to_lowercase() {
-                    match_kind = Normalized;
-                }
-            }
-
-            let coll = Collocation {
-                alt: alternative.raw.clone(),
-                side: row.side,
-                fam: alternative.fam.clone(),
-            };
-
-            match match_kind {
-                NoMatch => {
-                    results.entry(coll).or_default().insert(ContextWord {
-                        word: row.ctx.clone(),
-                        case_sensitive: false,
-                    });
-                }
-                Normalized => {
-                    results.entry(coll).or_default().insert(ContextWord {
-                        word: row.ctx.clone(),
-                        case_sensitive: true,
-                    });
-                }
-                Exact => {} // Discarded from standard uniqueness lists
-            }
-        }
-    }
-
-    // Convert HashSets to Vecs for output
-    results
-        .into_iter()
-        .map(|(k, v)| (k, v.into_iter().collect()))
-        .collect()
-}
-
-// ============================================================================
-// OUTPUT FORMATTING
-// ============================================================================
-
-/// Prints raw diagnostic output for each alternative
-///
-/// Shows all context words (before and after) with their POS tags.
-/// Useful for debugging and understanding the raw data from the API.
-///
-/// TODO: Consider making this output more structured (e.g., JSON)
-/// TODO: Add frequency information from the timeseries data
-fn print_raw_diagnostics(cfg: &Cfg, table: &[Row], dict: &FstDictionary) {
-    for (i, var) in cfg
-        .alternatives
-        .iter()
-        .sorted_by_key(|a| a.fam.as_ref().map(|s| s.to_ascii_lowercase()))
-        .enumerate()
-    {
-        println!(
-            "{}•{}{}",
-            if i == 0 { "" } else { "\n" },
-            if let Some(fam) = &var.fam {
-                format!("{}:", fam)
-            } else {
-                String::new()
-            },
-            var.raw,
-        );
-
-        let before_words: Vec<_> = table
-            .iter()
-            .filter(|r| r.alt == var.jfmt && r.side == Before)
-            .sorted_by_key(|r| r.ctx.to_ascii_lowercase())
-            .map(|r| &r.ctx)
-            .unique()
-            .collect();
-        let after_words: Vec<_> = table
-            .iter()
-            .filter(|r| r.alt == var.jfmt && r.side == After)
-            .sorted_by_key(|r| r.ctx.to_ascii_lowercase())
-            .map(|r| &r.ctx)
-            .unique()
-            .collect();
-
-        let before_poses: Vec<&'static Pos> = before_words
-            .iter()
-            .flat_map(|w| get_poses(dict, w))
-            .sorted_by_key(|pos| pos::pos_info(pos).ord)
-            .unique()
-            .collect();
-        println!(
-            "«p {}",
-            before_poses
-                .iter()
-                .enumerate()
-                .map(|(i, pos)| pos::pos_info(pos)
-                    ._emoji
-                    .tc(100, 200 + ((i as u8) & 1) * 50, 100)
-                    .to_string())
-                .join("")
-        );
-        println!(
-            "«w {}",
-            before_words
-                .iter()
-                .enumerate()
-                .map(|(i, w)| format!("{}", w.tc(100, 100, 200 + ((i as u8) & 1) * 50)))
-                .join(" ")
-        );
-        println!(
-            "»w {}",
-            after_words
-                .iter()
-                .enumerate()
-                .map(|(i, w)| format!("{}", w.tc(100, 100, 200 + ((i as u8) & 1) * 50)))
-                .join(" ")
-        );
-
-        let after_poses: Vec<&'static Pos> = after_words
-            .iter()
-            .flat_map(|w| get_poses(dict, w))
-            .sorted_by_key(|pos| pos::pos_info(pos).ord)
-            .unique()
-            .collect();
-        println!(
-            "»p {}",
-            after_poses
-                .iter()
-                .enumerate()
-                .map(|(i, pos)| pos::pos_info(pos)
-                    ._emoji
-                    .tc(100, 150 + ((i as u8) & 1) * 100, 100)
-                    .to_string())
-                .join("")
-        );
-    }
-}
-
-fn print_uniq_to(
-    fam: Option<&str>,
-    formatted: &[(Side, String)],
-    dict: &FstDictionary,
-    alt: &str,
-    cfg: &Cfg,
-    table: &[Row],
-) {
-    let fam_display = fam.map(|f| format!("{}::", f)).unwrap_or_default();
-
-    let target_jfmt = get_jfmt(cfg, alt);
-
-    // Get all POS from ALL context words of current alternative for each side
-    let current_poses_by_side = |side: Side| -> HashSet<&'static Pos> {
-        table
-            .iter()
-            .filter(|r| r.alt == target_jfmt && r.side == side)
-            .flat_map(|r| get_poses(dict, &r.ctx))
-            .collect()
-    };
-
-    // Get all POS from ALL context words of other alternatives for each side
-    let other_poses_by_side = |side: Side| -> HashSet<&'static Pos> {
-        table
-            .iter()
-            .filter(|r| r.alt != target_jfmt && r.side == side && same_family(cfg, &r.alt, fam))
-            .flat_map(|r| get_poses(dict, &r.ctx))
-            .collect()
-    };
-
-    let current_before_poses = current_poses_by_side(Before);
-    let current_after_poses = current_poses_by_side(After);
-    let other_before_poses = other_poses_by_side(Before);
-    let other_after_poses = other_poses_by_side(After);
-
-    let side_pos = |side: Side| {
-        let (current_poses, other_poses) = if side == Before {
-            (&current_before_poses, &other_before_poses)
-        } else {
-            (&current_after_poses, &other_after_poses)
-        };
-
-        current_poses
-            .iter()
-            .filter(|pos| !other_poses.contains(*pos))
-            .sorted_by_key(|pos| pos::pos_info(pos).ord)
-            .enumerate()
-            .map(|(i, pos)| format!("\x1b[{}m{}\x1b[0m", 33 + i % 2, pos::pos_info(pos).letter))
-            .join("")
-    };
-
-    let side_w = |side: Side| {
-        formatted
-            .iter()
-            .find(|(s, _)| *s == side)
-            .map(|(_, s)| s.as_str())
-            .unwrap_or("")
-    };
-
-    let (pre_str, post_str) = (side_w(Before), side_w(After));
-
-    println!(
-        "🟢 \x1b[35m{}\x1b[0m ¦ \x1b[36m{pre_str}\x1b[0m \
-        {fam_display}«\x1b[1m{alt}\x1b[0m» \
-        \x1b[34m{post_str}\x1b[0m ¦ \x1b[32m{}\x1b[0m",
-        side_pos(Before),
-        side_pos(After)
-    );
-}
-
-/// Prints "prohibited" context words - words that appear with ALL other alternatives
-/// but NOT with the current alternative.
-///
-/// This helps identify contexts that strongly discriminate against a particular
-/// alternative. For example, if "house" appears with "steak" but never with "stake",
-/// then "house" is a prohibited context for "stake".
-///
-/// TODO: Consider adding a confidence score based on frequency
-fn print_prohibited(cfg: &Cfg, table: &[Row], dict: &FstDictionary, alt: &String, fam: Option<&str>) {
-    if cfg.alternatives.len() <= 2 {
-        return;
-    }
-    let mut prohib_pre_words = Vec::new();
-    let mut prohib_post_words = Vec::new();
-
-    let target_jfmt = get_jfmt(cfg, alt);
-    let other_count = if cfg.has_families {
-        cfg.alternatives
-            .iter()
-            .filter(|a| a.fam.as_deref() == fam && a.jfmt != target_jfmt)
-            .count()
-    } else {
-        cfg.alternatives.len() - 1
-    };
-
-    if other_count == 0 {
-        return;
-    }
-
-    let context_counts = table
-        .iter()
-        .filter(|r| r.alt != target_jfmt && same_family(cfg, &r.alt, fam))
-        .fold(HashMap::new(), |mut acc, r| {
-            *acc.entry((r.side, &r.ctx)).or_insert(0) += 1;
-            acc
-        });
-
-    for ((side, ctx), count) in context_counts {
-        if count == other_count
-            && !table
-                .iter()
-                .any(|r| r.alt == target_jfmt && r.side == side && &r.ctx == ctx)
-        {
-            match side {
-                Before => prohib_pre_words.push(ctx.clone()),
-                After => prohib_post_words.push(ctx.clone()),
-            }
-        }
-    }
-
-    if !prohib_pre_words.is_empty() || !prohib_post_words.is_empty() {
-        prohib_pre_words.sort_by_key(|w| w.to_lowercase());
-        prohib_post_words.sort_by_key(|w| w.to_lowercase());
-
-        // Calculate prohibited POS: POS that appear in ALL other alternatives but NOT in current
-        let pos_counts = table
-            .iter()
-            .filter(|r| r.alt != target_jfmt && same_family(cfg, &r.alt, fam))
-            .fold(HashMap::new(), |mut acc, r| {
-                for pos in get_poses(dict, &r.ctx) {
-                    *acc.entry((r.side, pos)).or_insert(0) += 1;
-                }
-                acc
-            });
-
-        let n_pos = |side: Side| {
-            pos_counts
-                .iter()
-                .filter(|((s, _), count)| *s == side && **count == other_count)
-                .map(|((_, pos), _)| *pos)
-                .filter(|pos| {
-                    // Filter out POS that appear in current alternative
-                    !table
-                        .iter()
-                        .filter(|r| r.alt == target_jfmt && r.side == side)
-                        .any(|r| get_poses(dict, &r.ctx).contains(pos))
-                })
-                .unique()
-                .sorted_by_key(|p| pos::pos_info(p).ord)
-                .enumerate()
-                .map(|(i, p)| format!("\x1b[{}m{}\x1b[0m", 33 + i % 2, pos::pos_info(p).letter))
-                .join("")
-        };
-
-        let n_pre_pos = n_pos(Before);
-        let n_post_pos = n_pos(After);
-
-        println!(
-            "🚫 \x1b[31m{}\x1b[0m | {} ¦ «{}» ¦ {} | \x1b[31m{}\x1b[0m",
-            n_pre_pos,
-            prohib_pre_words
-                .iter()
-                .enumerate()
-                .map(|(i, w)| format!("\x1b[3{}m{}\x1b[0m", i % 2 + 4, w))
-                .join(" "),
-            alt,
-            prohib_post_words
-                .iter()
-                .enumerate()
-                .map(|(i, w)| format!("\x1b[3{}m{}\x1b[0m", i % 2 + 4, w))
-                .join(" "),
-            n_post_pos
-        );
-    }
-}
-
-/// Prints family-level uniqueness view
-///
-/// Shows context words and POS tags that are unique to each family when comparing
-/// across all families. This helps identify what makes each family distinctive.
-///
-/// The DAGGER (†) symbol indicates words that are unique only when
-/// considering case sensitivity.
-///
-/// TODO: This function has deeply nested loops that could be refactored
-/// TODO: The uniqueness check logic is complex and could be extracted
-/// TODO: Consider adding a summary view showing the most distinctive words
-fn print_family_uniqueness(
-    results: &HashMap<Collocation, Vec<ContextWord>>,
-    dict: &FstDictionary,
-) {
-    let mut family_contexts: HashMap<Option<String>, HashMap<Side, HashMap<String, ContextMatch>>> =
-        HashMap::new();
-
-    for (collocation, context_words) in results {
-        let side_map = family_contexts
-            .entry(collocation.fam.as_deref().map(|s| s.to_string()))
-            .or_default()
-            .entry(collocation.side)
-            .or_default();
-
-        for cw in context_words {
-            let match_kind = if cw.case_sensitive {
-                Normalized
-            } else {
-                NoMatch
-            };
-            side_map
-                .entry(cw.word.clone())
-                .and_modify(|existing| {
-                    if *existing == Normalized && match_kind == NoMatch {
-                        *existing = NoMatch;
-                    }
-                })
-                .or_insert(match_kind);
-        }
-    }
-
-    let families: Vec<_> = family_contexts.keys().cloned().collect();
-    for fam in &families {
-        let mut before_unique = HashMap::new();
-        let mut after_unique = HashMap::new();
-        let mut before_pos_unique: HashSet<&'static Pos> = HashSet::new();
-        let mut after_pos_unique: HashSet<&'static Pos> = HashSet::new();
-
-        if let Some(fam_ctx) = family_contexts.get(fam) {
-            if let Some(this_before) = fam_ctx.get(&Before) {
-                for (ctx, match_kind) in this_before {
-                    let is_unique =
-                        families
-                            .iter()
-                            .filter(|other_fam| *other_fam != fam)
-                            .all(|other_fam| {
-                                family_contexts
-                                    .get(other_fam)
-                                    .and_then(|ctxs| ctxs.get(&Before))
-                                    .map(|ob| !ob.contains_key(ctx))
-                                    .unwrap_or(true)
-                            });
-                    if is_unique {
-                        before_unique.insert(ctx, *match_kind);
-                    }
-                }
-            }
-            if let Some(this_after) = fam_ctx.get(&After) {
-                for (ctx, match_kind) in this_after {
-                    let is_unique =
-                        families
-                            .iter()
-                            .filter(|other_fam| *other_fam != fam)
-                            .all(|other_fam| {
-                                family_contexts
-                                    .get(other_fam)
-                                    .and_then(|ctxs| ctxs.get(&After))
-                                    .map(|oa| !oa.contains_key(ctx))
-                                    .unwrap_or(true)
-                            });
-                    if is_unique {
-                        after_unique.insert(ctx, *match_kind);
-                    }
-                }
-            }
-
-            // Calculate POS from unique context words only
-            for ctx in before_unique.keys() {
-                for pos in get_poses(dict, ctx) {
-                    before_pos_unique.insert(pos);
-                }
-            }
-            for ctx in after_unique.keys() {
-                for pos in get_poses(dict, ctx) {
-                    after_pos_unique.insert(pos);
-                }
-            }
-
-            // Filter POS to only those unique to this family
-            let mut all_before_pos: HashSet<&'static Pos> = HashSet::new();
-            let mut all_after_pos: HashSet<&'static Pos> = HashSet::new();
-
-            for other_fam in families.iter().filter(|f| *f != fam) {
-                if let Some(other_ctx) = family_contexts.get(other_fam) {
-                    // Only collect POS from UNIQUE context words in other families
-                    if let Some(other_before) = other_ctx.get(&Before) {
-                        for (ctx, _) in other_before {
-                            let is_unique = families
-                                .iter()
-                                .filter(|of| *of != other_fam)
-                                .all(|of| {
-                                    family_contexts
-                                        .get(of)
-                                        .and_then(|ctxs| ctxs.get(&Before))
-                                        .map(|ob| !ob.contains_key(ctx))
-                                        .unwrap_or(true)
-                                });
-                            if is_unique {
-                                for pos in get_poses(dict, ctx) {
-                                    all_before_pos.insert(pos);
-                                }
-                            }
-                        }
-                    }
-                    if let Some(other_after) = other_ctx.get(&After) {
-                        for (ctx, _) in other_after {
-                            let is_unique = families
-                                .iter()
-                                .filter(|of| *of != other_fam)
-                                .all(|of| {
-                                    family_contexts
-                                        .get(of)
-                                        .and_then(|ctxs| ctxs.get(&After))
-                                        .map(|oa| !oa.contains_key(ctx))
-                                        .unwrap_or(true)
-                                });
-                            if is_unique {
-                                for pos in get_poses(dict, ctx) {
-                                    all_after_pos.insert(pos);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            before_pos_unique.retain(|p| !all_before_pos.contains(p));
-            after_pos_unique.retain(|p| !all_after_pos.contains(p));
-        }
-
-        fn format_contexts(contexts: &HashMap<&String, ContextMatch>) -> Vec<String> {
-            contexts
-                .iter()
-                .sorted_by_key(|(s, _)| s.to_lowercase())
-                .enumerate()
-                .map(|(i, (s, mk))| {
-                    format!(
-                        "\x1b[{}m{}\x1b[0m{}",
-                        32 - (i & 1),
-                        s,
-                        if *mk == Normalized { "†" } else { "" }
-                    )
-                })
-                .collect()
-        }
-
-        fn format_poses(poses: &HashSet<&'static Pos>) -> String {
-            poses
-                .iter()
-                .sorted_by_key(|pos| pos::pos_info(pos).ord)
-                .enumerate()
-                .map(|(i, pos)| format!("\x1b[{}m{}\x1b[0m", 33 + i % 2, pos::pos_info(pos).letter))
-                .join("")
-        }
-
-        println!(
-            "{} \x1b[0;1m«{}»\x1b[0m {}\x1b[0m\x1b[K",
-            format_contexts(&before_unique).join(" "),
-            fam.as_deref().unwrap_or("None"),
-            format_contexts(&after_unique).join(" ")
-        );
-
-        // Print POS discriminators if any
-        if !before_pos_unique.is_empty() || !after_pos_unique.is_empty() {
-            println!(
-                "{} \x1b[0;1m«{}»\x1b[0m {}\x1b[0m\x1b[K",
-                format_poses(&before_pos_unique),
-                fam.as_deref().unwrap_or("None"),
-                format_poses(&after_pos_unique)
-            );
-        }
-    }
 }
 
 // ============================================================================
@@ -899,42 +268,292 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let table = google_ngrams::fetch_google_ngrams(&cfg)?;
 
-    let dict = FstDictionary::curated();
+    #[derive(Debug, Default)]
+    pub struct FamilyTree(pub HashMap<Option<String>, AlternativeMap>);
 
-    if cfg.raw {
-        print_raw_diagnostics(&cfg, &table, &dict);
+    impl FamilyTree {
+        /// Destructures the tree into exactly two inner AlternativeMaps.
+        pub fn into_two_families(self) -> (AlternativeMap, AlternativeMap) {
+            let mut it = self.0.into_values();
+            (it.next().unwrap(), it.next().unwrap())
+        }
     }
 
-    let results = evaluate_contexts(&cfg, &table);
-    let keys = results
-        .keys() //.collect::<Vec<_>>();
-        .sorted_by(|a, b| {
-            a.fam
-                .as_ref()
-                .cmp(&b.fam.as_ref())
-                .then(a.alt.cmp(&b.alt))
-                .then(a.side.cmp(&b.side))
-        });
+    #[derive(Debug, Default)]
+    pub struct AlternativeMap(pub HashMap<String, SideMap>);
 
-    for (fam_alt, gr) in &keys.into_iter().chunk_by(|k| (k.fam.clone(), k.alt.clone())) {
-        let mut side_cwords_pair = Vec::new();
-
-        for colloc in gr {
-            let cwords = results.get(colloc).unwrap();
-            let cwords_str = format_context_words(cwords);
-            side_cwords_pair.push((colloc.side, cwords_str));
+    impl AlternativeMap {
+        /// Collects unique context words from a specific side of every alternative.
+        pub fn contexts_for_side(&self, side: crate::Side) -> HashSet<String> {
+            let mut set = HashSet::new();
+            for side_map in self.values() {
+                set.extend(side_map.contexts_for_side(side));
+            }
+            set
         }
 
-        let (fam, alt) = fam_alt;
-
-        print_uniq_to(fam.as_deref(), &side_cwords_pair, &dict, &alt, &cfg, &table);
-
-        print_prohibited(&cfg, &table, &dict, &alt, fam.as_deref());
+        /// Parameterized method to collect unique POS references for a specific side.
+        pub fn poses_for_side(&self, side: crate::Side) -> HashSet<&'static Pos> {
+            let mut set = HashSet::new();
+            for side_map in self.values() {
+                set.extend(side_map.poses_for_side(side));
+            }
+            set
+        }
     }
 
-    if cfg.has_families {
-        println!();
-        print_family_uniqueness(&results, &dict);
+    #[derive(Debug, Default)]
+    pub struct SideMap(pub HashMap<crate::Side, ContextSet>);
+
+    impl SideMap {
+        pub fn contexts_for_side(&self, side: crate::Side) -> HashSet<String> {
+            self.get(&side)
+                .map(|ctx_set| ctx_set.contexts())
+                .unwrap_or_default()
+        }
+
+        pub fn poses_for_side(&self, side: crate::Side) -> HashSet<&'static Pos> {
+            self.get(&side)
+                .map(|ctx_set| ctx_set.all_poses())
+                .unwrap_or_default()
+        }
+    }
+
+    #[derive(Debug, Default)]
+    pub struct ContextSet(pub HashMap<String, HashSet<&'static Pos>>);
+
+    impl ContextSet {
+        pub fn contexts(&self) -> HashSet<String> {
+            self.keys().cloned().collect()
+        }
+
+        pub fn all_poses(&self) -> HashSet<&'static Pos> {
+            let mut set = HashSet::new();
+            for pos_set in self.values() {
+                set.extend(pos_set.iter().copied());
+            }
+            set
+        }
+    }
+
+    // --- DEREF / DEREFMUT BOILERPLATE ---
+    // This allows your structs to implicitly behave like their inner collections!
+
+    impl Deref for FamilyTree {
+        type Target = HashMap<Option<String>, AlternativeMap>;
+        fn deref(&self) -> &Self::Target {
+            &self.0
+        }
+    }
+    impl DerefMut for FamilyTree {
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            &mut self.0
+        }
+    }
+
+    impl Deref for AlternativeMap {
+        type Target = HashMap<String, SideMap>;
+        fn deref(&self) -> &Self::Target {
+            &self.0
+        }
+    }
+    impl DerefMut for AlternativeMap {
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            &mut self.0
+        }
+    }
+
+    impl Deref for SideMap {
+        type Target = HashMap<crate::Side, ContextSet>;
+        fn deref(&self) -> &Self::Target {
+            &self.0
+        }
+    }
+    impl DerefMut for SideMap {
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            &mut self.0
+        }
+    }
+
+    impl Deref for ContextSet {
+        type Target = HashMap<String, HashSet<&'static Pos>>;
+        fn deref(&self) -> &Self::Target {
+            &self.0
+        }
+    }
+    impl DerefMut for ContextSet {
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            &mut self.0
+        }
+    }
+
+    // --- EXECUTION CONTEXT ---
+
+    let dict = FstDictionary::curated();
+    let mut tree = FamilyTree::default();
+
+    for row in table {
+        let poses: Vec<&'static Pos> = get_poses(&dict, &row.ctx);
+
+        // 1. Normalize the grouping key:
+        // If explicit family exists, use it.
+        // If None, isolate this alternative into its own unique family group!
+        let family_key = match &row.fam {
+            Some(fam_name) => Some(fam_name.clone()),
+            None => Some(row.alt.clone()), // Fallback to alternative name as the family name
+        };
+
+        // 2. Build the tree with the normalized key
+        tree.entry(family_key)
+            .or_default()
+            .entry(row.alt.clone())
+            .or_default()
+            .entry(row.side)
+            .or_default()
+            .entry(row.ctx.clone())
+            .or_default()
+            .extend(poses);
+    }
+
+    println!(
+        "Actual family keys in tree: {:?}",
+        tree.keys().collect::<Vec<_>>()
+    );
+
+    if tree.len() == 2 {
+        // 1. Extract family names and their corresponding AlternativeMaps
+        let family_keys: Vec<Option<String>> = tree.keys().cloned().collect();
+        let fam_name_a = family_keys[0].as_deref().unwrap_or("None");
+        let fam_name_b = family_keys[1].as_deref().unwrap_or("None");
+
+        println!("“{}” vs. “{}”", fam_name_a.c(ORANGE), fam_name_b.c(RED));
+
+        // Destructure the two family containers
+        let (fam_a, fam_b) = tree.into_two_families();
+
+        // 2. The unified reusable analysis pipeline closure
+        let analyze_side = |label: &str, side_variant: crate::Side| {
+            let word_set_a = fam_a.contexts_for_side(side_variant);
+            let word_set_b = fam_b.contexts_for_side(side_variant);
+
+            let (word_color, pos_colour) = (YELLOW, MAGENTA);
+            let side_color = if side_variant == crate::Side::Before {
+                GREEN
+            } else {
+                CYAN
+            };
+            println!("=== {} {} ===", label.c(side_color), "WORDS".c(word_color));
+
+            let word_union: HashSet<String> = word_set_a.union(&word_set_b).cloned().collect();
+            // println!("  Union (A ∪ B): [{}]", format_set(&word_union));
+
+            let word_intersection: HashSet<String> = word_set_a.intersection(&word_set_b).cloned().collect();
+
+            let word_diff_a: HashSet<String> = word_set_a.difference(&word_set_b).cloned().collect();
+
+            let word_diff_b: HashSet<String> = word_set_b.difference(&word_set_a).cloned().collect();
+
+            // Let's print the union, but with different colours depending on whether the word is in both sets or only in one
+            let mut combined = Vec::new();
+            for word in word_union {
+                if word_set_a.contains(&word) && word_set_b.contains(&word) {
+                    combined.push(format!("\x1b[1m{}\x1b[0m", word)); // Bold for words in both
+                } else if word_set_a.contains(&word) {
+                    combined.push(format!("\x1b[33m{}\x1b[0m", word)); // Yellow colour for words only in A
+                } else {
+                    combined.push(format!("\x1b[31m{}\x1b[0m", word)); // Red colour for words only in B
+                }
+            }
+            println!("  {}", combined.join(", "));
+
+            // Now let's print set a diff, then the intersection, then set b diff on one line in that order
+            let mut combined_pos = Vec::new();
+            for pos in word_diff_a {
+                combined_pos.push(format!("\x1b[33m{}\x1b[0m", pos)); // Yellow colour for words only in A
+            }
+            for pos in word_intersection {
+                combined_pos.push(format!("\x1b[1m{}\x1b[0m", pos)); // Bold for words in both
+            }
+            for pos in word_diff_b {
+                combined_pos.push(format!("\x1b[31m{}\x1b[0m", pos)); // Red colour for words only in B
+            }
+            println!("  {}", combined_pos.join(", "));
+
+            // --- Parts of Speech (Pos) Set Processing ---
+            let pos_set_a = fam_a.poses_for_side(side_variant);
+            let pos_set_b = fam_b.poses_for_side(side_variant);
+
+            println!(
+                "=== {} {} ===",
+                label.c(side_color),
+                "POS".c(pos_colour)
+            );
+
+            let pos_union: HashSet<&'static Pos> = pos_set_a.union(&pos_set_b).copied().collect();
+            
+            // println!(
+            //     "  POS Union ({} ∪ {}): [{}]",
+            //     fam_name_a,
+            //     fam_name_b,
+            //     format_poses(&pos_union)
+            // );
+            // println!("\n");
+
+            // POS intersection
+            let _pos_intersection: HashSet<&'static Pos> =
+                pos_set_a.intersection(&pos_set_b).copied().collect();
+            // println!(
+            //     "  POS Intersection ({} ∩ {}): [{}]",
+            //     fam_name_a,
+            //     fam_name_b,
+            //     format_poses(&pos_intersection)
+            // );
+
+            // POS difference A∖B
+            let _pos_diff_a: HashSet<&'static Pos> =
+                pos_set_a.difference(&pos_set_b).copied().collect();
+            // println!(
+            //     "  POS Difference ({} ∖ {}): [{}]",
+            //     fam_name_a.c((200,150,0)),
+            //     fam_name_b.c((200,0,0)),
+            //     format_poses(&pos_diff_a)
+            // );
+
+            // POS difference B∖A
+            let _pos_diff_b: HashSet<&'static Pos> =
+                pos_set_b.difference(&pos_set_a).copied().collect();
+            // println!(
+            //     "  {} Difference ({} ∖ {}): [{}]",
+            //     "POS".c(pos_colour),
+            //     fam_name_b.c((200,0,0)),
+            //     fam_name_a.c((200,150,0)),
+            //     format_poses(&pos_diff_b)
+            // );
+
+            // POS combined
+            let mut combined = Vec::new();
+            for pos in pos_union {
+                if pos_set_a.contains(&pos) && pos_set_b.contains(&pos) {
+                    combined.push(format!("\x1b[1m{:?}\x1b[0m", pos)); // Bold for pos in both
+                } else if pos_set_a.contains(&pos) {
+                    combined.push(format!("\x1b[33m{:?}\x1b[0m", pos)); // Yellow colour for pos only in A
+                } else {
+                    combined.push(format!("\x1b[31m{:?}\x1b[0m", pos)); // Red colour for pos only in B
+                }
+            }
+            println!("  {}", combined.join(", "));
+        };
+
+        // 3. Execute everything seamlessly for the LEFT side
+        analyze_side("LEFT", crate::Side::Before);
+
+        // 4. Execute everything seamlessly for the RIGHT side
+        analyze_side("RIGHT", crate::Side::After);
+    } else {
+        println!(
+            "Tree size must be exactly 2 to run analysis, but got {}",
+            tree.len()
+        );
     }
 
     Ok(())
