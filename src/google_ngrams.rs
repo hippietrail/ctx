@@ -54,7 +54,6 @@ enum NgramType {
 /// The L/R brackets handle apostrophes in words (e.g., "don't" becomes "[* don't]")
 /// NOTE: See also the special handling for hyphens in main.rs/cli()
 ///
-/// TODO: Consider adding smoothing parameter
 /// NOTE: Case-insensitive mode cannot be used in combination with wildcards
 pub fn build_url(cfg: &Cfg) -> url::Url {
     let mut url = url::Url::parse("https://books.google.com/ngrams/json").unwrap();
@@ -74,7 +73,7 @@ pub fn build_url(cfg: &Cfg) -> url::Url {
         .join(",");
 
     if cfg.debug {
-        eprintln!("👉 ‘{content}’");
+        // eprintln!("👉 ‘{content}’");
     }
 
     url.query_pairs_mut().append_pair("content", &content);
@@ -88,10 +87,6 @@ pub fn build_url(cfg: &Cfg) -> url::Url {
 }
 
 /// Fetches JSON data from the given URL
-///
-/// TODO: Add timeout configuration
-/// TODO: Add retry logic for network failures
-/// TODO: Consider using async reqwest for better performance
 pub fn fetch_json(url: url::Url) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
     let response = reqwest::blocking::get(url)?;
     let json = response.json::<serde_json::Value>()?;
@@ -105,48 +100,67 @@ pub fn fetch_json(url: url::Url) -> Result<serde_json::Value, Box<dyn std::error
 /// Parses Google Ngram items directly into the application's general Row format
 ///
 /// Filters out non-expansion ngrams and isolates the context words appearing
-/// before or after each alternative phrase.
+/// before or after each alternative phrase. This data is then used to build
+/// the hierarchical FamilyTree structure for analysis.
 ///
 /// # Returns
-/// A vector of general `crate::Row` structs containing the side, alternative,
-/// and context data.
-fn parse(items: Vec<NgramItem>) -> Result<Vec<crate::Row>, Box<dyn std::error::Error>> {
-    let mut table = Vec::<crate::Row>::new();
+/// A vector of general `crate::Row` structs containing the family, alternative,
+/// side, and context data.
+fn parse(cfg: &Cfg, items: Vec<NgramItem>) -> Result<Vec<crate::Row>, Box<dyn std::error::Error>> {
+    items
+        .into_iter()
+        .filter(|item| {
+            item.kind == NgramType::Expansion
+                && !item.ngram.starts_with("* ")
+                && !item.ngram.ends_with(" *")
+        })
+        .map(|item| {
+            let (alt_name, is_prefix) = if let Some(alt) = item.parent.strip_prefix("* ") {
+                (alt, true)
+            } else if let Some(alt) = item.parent.strip_suffix(" *") {
+                (alt, false)
+            } else {
+                return Err("No wildcard found in parent".into());
+            };
 
-    for item in items {
-        if item.kind != NgramType::Expansion {
-            continue;
-        }
-        if item.ngram.starts_with("* ") || item.ngram.ends_with(" *") {
-            continue;
-        }
+            // Match each alternative between Google Ngrams results and the config from the command line.
+            let fam = match cfg
+                .alternatives
+                .iter()
+                .find(|a| a.raw == alt_name)
+            {
+                Some(alt) => alt.fam.clone(),
+                None => {
+                    eprintln!("ERROR: Alternative '{}' from Google Ngrams not found in command line config", alt_name);
+                    eprintln!("Google Ngrams alternative: {}", alt_name);
+                    eprintln!("Config alternatives:");
+                    for alt in &cfg.alternatives {
+                        eprintln!("  - {}", alt.raw);
+                    }
+                    return Err("Alternative from Google Ngrams not found in alternatives from command line".into());
+                }
+            };
 
-        let (alternative, is_prefix) = match item.parent.strip_prefix("* ") {
-            Some(alt) => (alt, true),
-            None => (
-                item.parent
-                    .strip_suffix(" *")
-                    .ok_or("No wildcard found in parent")?,
-                false,
-            ),
-        };
+            let context = if is_prefix {
+                &item.ngram[..item.ngram.len() - (alt_name.len() + 1)]
+            } else {
+                &item.ngram[alt_name.len() + 1..]
+            };
 
-        let context = match is_prefix {
-            true => &item.ngram[..item.ngram.len() - (alternative.len() + 1)],
-            false => &item.ngram[alternative.len() + 1..],
-        };
+            let side = if is_prefix {
+                crate::Before
+            } else {
+                crate::After
+            };
 
-        table.push(crate::Row {
-            side: match is_prefix {
-                true => crate::Before,
-                false => crate::After,
-            },
-            alt: alternative.to_string(),
-            ctx: context.to_string(),
-        });
-    }
-
-    Ok(table)
+            Ok(crate::Row {
+                fam,
+                alt: alt_name.to_string(),
+                side,
+                ctx: context.to_string(),
+            })
+        })
+        .collect()
 }
 
 pub fn fetch_google_ngrams(cfg: &Cfg) -> Result<Vec<crate::Row>, Box<dyn std::error::Error>> {
@@ -157,5 +171,5 @@ pub fn fetch_google_ngrams(cfg: &Cfg) -> Result<Vec<crate::Row>, Box<dyn std::er
 
     let json_value = fetch_json(url)?;
 
-    parse(serde_json::from_value(json_value)?)
+    parse(cfg, serde_json::from_value(json_value)?)
 }

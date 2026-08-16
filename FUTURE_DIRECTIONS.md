@@ -1,6 +1,33 @@
 # Future Directions for Confusable Word Analyzer
 
+## Current Implementation
+
+The current analyzer uses a hierarchical data structure and set operations to compare two families of alternatives:
+
+**Architecture:**
+- **FamilyTree**: HashMap of families → AlternativeMap
+- **AlternativeMap**: HashMap of alternatives → SideMap  
+- **SideMap**: HashMap of sides (Before/After) → ContextSet
+- **ContextSet**: HashMap of context words → HashSet of POS tags
+
+**Analysis approach:**
+- Compares exactly 2 families using set operations (union, intersection, difference)
+- Color-coded output shows shared (bold) vs unique (yellow/red) contexts and POS patterns
+- Focuses on LEFT (before) and RIGHT (after) context analysis
+- Uses Harper's dictionary for POS tagging
+
 ## Current Limitations
+
+### Family Count Constraint
+The current implementation requires exactly 2 families for comparison:
+- If more than 2 families are provided, analysis fails
+- If no families are specified, each alternative becomes its own family
+- Limits the tool to pairwise comparisons only
+
+**Needed improvements:**
+- Support for N-way comparisons (3+ families)
+- Option to compare all families against each other in a matrix
+- Configurable comparison modes (pairwise, all-vs-all, reference-based)
 
 ### Inflected Words
 The current analyzer treats each distinct string as a separate candidate, which doesn't work well for morphological variants:
@@ -15,7 +42,7 @@ The current analyzer treats each distinct string as a separate candidate, which 
 - Could use libraries like `lemmatizer` or integrate with NLP tools
 - Consider part-of-speech tagging to handle different word classes
 
-### Variable Set Sizes ~~PARTIALLY IMPLEMENTED~~
+### Variable Set Sizes ~~REIMPLEMENTED~~
 The current approach supports multiple confusable terms via family grouping:
 
 **Examples:**
@@ -26,7 +53,8 @@ The current approach supports multiple confusable terms via family grouping:
 - `--family=<name>` flag enables manual family grouping
 - Families allow comparing groups of related alternatives (e.g., case variants, compound forms)
 - User can manually specify families via command line arguments
-- Provides family-level uniqueness analysis
+- Hierarchical data structure organizes families → alternatives → sides → contexts → POS tags
+- Set operations (union, intersection, difference) compare families
 
 **Previous clustering approach (deprecated):**
 - Auto-clustering code exists in `srcold/clustering.rs` but is not currently used
@@ -34,6 +62,7 @@ The current approach supports multiple confusable terms via family grouping:
 - Automatically determined core cluster size from frequency distribution
 
 **Future improvements:**
+- Support for more than 2 families in a single analysis
 - Similarity-based clustering (Levenshtein, Jaccard, embedding-based)
 - Hierarchical clustering to discover groups
 - Configurable threshold for grouping
@@ -49,25 +78,20 @@ The current approach supports multiple confusable terms via family grouping:
 - Configurable tokenization rules
 - Handle en-dashes, em-dashes, and other punctuation
 
-### Case Sensitivity Analysis ~~IMPLEMENTED~~
-**Example: trouble-vs-troubles.txt**
-- 22 case-sensitive contexts (only appear in one case form)
-- 1 case-insensitive context: "the" appears as both "the" and "The"
-- This suggests most context words are consistently cased in the corpus
+### Case Sensitivity Analysis ~~REMOVED~~
+**Previous implementation:**
+- Tracked case variations for each context word
+- Classified contexts as case-sensitive vs case-insensitive
+- Used DAGGER (†) symbol to mark case-sensitive contexts in output
 
-**Example: border-vs-boarder.txt**
-- 23 case-sensitive contexts
-- 0 case-insensitive contexts
-- All context words appear in consistent case
+**Current status:**
+- Case sensitivity analysis has been removed in the refactor
+- The new implementation focuses on set operations without case-specific tracking
+- Harper's dictionary is case-folded for POS lookup
 
-**Current implementation:**
-- Track case variations for each context word
-- Classify contexts as:
-  - **Case-sensitive**: Only one case form observed (e.g., "Mexican", "posterior")
-  - **Case-insensitive**: Multiple case forms observed (e.g., "the"/"The")
-- POS analysis uses case-insensitive contexts (since Harper's dictionary is case-folded)
-- This data-driven approach avoids over-generalization while handling natural case variation
-- DAGGER (†) symbol marks case-sensitive contexts in output
+**Future considerations:**
+- Re-implement case sensitivity analysis if needed for specific use cases
+- Could be added as an optional analysis mode
 
 ### Multi-word Phrases ~~IMPLEMENTED~~
 **Example: wide-ranging vs wide-sweeping**
@@ -84,32 +108,37 @@ The current approach supports multiple confusable terms via family grouping:
 
 ### 1. Preprocessing Pipeline
 ```
-Raw text → Normalization → Tokenization → Lemmatization → Feature extraction
+Raw text → Normalization → Tokenization → POS lookup → Hierarchical organization
 ```
 
-**Current status**: Partially implemented
+**Current status**: Implemented
 - Input normalization for hyphens and apostrophes
 - Multi-word phrase support
-- Basic tokenization via Google Ngrams API
+- Tokenization via Google Ngrams API
+- POS lookup via Harper's dictionary
+- Hierarchical organization (FamilyTree → AlternativeMap → SideMap → ContextSet)
 
 ### 2. Clustering Stage
 - **Current**: Manual family grouping via CLI flags
 - **Deprecated**: Frequency-based clustering with rolling baseline divergence (exists in srcold/)
+- **Future**: Support for N-way comparisons (3+ families)
 - **Future**: Similarity metrics (Levenshtein, Jaccard, embedding-based)
 - **Future**: Hierarchical clustering to discover groups
 - **Future**: Configurable threshold for grouping
 
 ### 3. Context Analysis
 - **Current**: Single-word context extraction with POS tagging via Harper
-- **Current**: Case sensitivity analysis
+- **Current**: Set operations (union, intersection, difference) for family comparison
 - **Current**: Year filtering for temporal analysis
+- **Current**: LEFT (before) and RIGHT (after) side analysis
 - **Future**: Expand context window beyond immediate neighbors
 - **Future**: Weight contexts by frequency and discriminative power
 - **Future**: Statistical significance testing
+- **Future**: Support for more than 2 families in comparison
 
 ### 4. POS Analysis Enhancement
 - **Current**: Basic POS categorization (Noun, Verb, Adjective, etc.)
-- **Current**: POS discrimination analysis (unique POS per alternative)
+- **Current**: POS set operations for family comparison
 - **Future**: Drill down into POS sub-properties:
   - Determiners: kinds (definite/indefinite, demonstrative, etc.)
   - Pronouns: person (1st/2nd/3rd), number (singular/plural), case (subject/object)
@@ -122,14 +151,17 @@ Raw text → Normalization → Tokenization → Lemmatization → Feature extrac
   - Cross-tabulation of words × POS matrix
 
 ### 5. Output Generation
-- **Current**: Color-coded confusable contexts with POS associations
-- **Current**: Raw diagnostic output with POS tags
-- **Current**: Prohibited context detection
-- **Current**: Family-level uniqueness view
+- **Current**: Color-coded shared vs unique contexts and POS patterns
+- **Current**: Family-level comparison view (exactly 2 families)
+- **Current**: Debug mode for query inspection
+- **Current**: LEFT and RIGHT side analysis
+- **Future**: Support for N-way family comparisons
 - **Future**: Grouped results with confidence scores
 - **Future**: Contextual examples for each group
 - **Future**: Statistical summaries
 - **Future**: Export to structured formats (JSON, CSV)
+- **Future**: Raw diagnostic output mode
+- **Future**: Visualization options (charts, graphs)
 
 ## Data Quality Considerations
 
@@ -139,6 +171,7 @@ Raw text → Normalization → Tokenization → Lemmatization → Feature extrac
   - Multi-word phrase support
   - Special character handling (hyphens, apostrophes)
   - Family grouping for related alternatives
+  - Year filtering for temporal analysis
 - **Could support**:
   - File-based input (one phrase per line)
   - Sentence-level input with automatic extraction
