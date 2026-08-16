@@ -93,7 +93,7 @@ pub struct Alternative {
 }
 
 /// Configuration parsed from command-line arguments
-/// - `raw`: If true, print raw diagnostic output
+/// - `raw`: Reserved for future raw diagnostic output
 /// - `alternatives`: List of word alternatives to analyze
 /// - `has_families`: Whether family groupings are enabled
 pub struct Cfg {
@@ -113,9 +113,6 @@ pub struct Cfg {
 /// Supported arguments:
 /// - `--raw`: Enable raw diagnostic output
 /// - `--family=<name>`, `--fam=<name>`, `-f=<name>`: Set family for subsequent alternatives
-///
-/// TODO: Add --help flag to show usage
-/// TODO: Validate that at least one alternative is provided
 pub fn cli() -> Result<Cfg, Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().skip(1).collect();
     let mut cfg = Cfg {
@@ -165,7 +162,7 @@ pub fn cli() -> Result<Cfg, Box<dyn std::error::Error>> {
             return Err(format!("Unknown option: {}", arg).into());
         } else if arg.contains('-') {
             // Hyphenated phrases: replace hyphens with " - " for Ngram JSON API compatibility
-            // NOTE: See also the special handling for apostrophes in google_ngram_viewer.rs/build_url()
+            // NOTE: See also the special handling for apostrophes in google_ngrams.rs/build_url()
             cfg.alternatives.push(Alternative {
                 raw: arg.clone(),
                 jfmt: arg.split('-').join(" - "),
@@ -173,7 +170,7 @@ pub fn cli() -> Result<Cfg, Box<dyn std::error::Error>> {
             });
         } else if arg.contains('\'') {
             // Special handling when any word starts or ends with an apostrophe, such as 'tis or 'nother
-            // NOTE: See also the special handling for apostrophes in google_ngram_viewer.rs/build_url()
+            // NOTE: See also the special handling for apostrophes in google_ngrams.rs/build_url()
             let jfmt = arg
                 .split(' ')
                 .map(|part| {
@@ -229,9 +226,6 @@ pub fn cli() -> Result<Cfg, Box<dyn std::error::Error>> {
 ///
 /// Uses the harper_core dictionary to look up word metadata
 /// and returns matching POS tags based on predefined predicates.
-///
-/// TODO: Consider caching results for repeated lookups
-/// TODO: Add support for unknown words (OOV - out of vocabulary)
 fn get_poses(dict: &FstDictionary, word: &str) -> Vec<&'static Pos> {
     dict.get_word_metadata_str(word)
         .map_or_else(Vec::new, |md| {
@@ -253,16 +247,12 @@ fn get_poses(dict: &FstDictionary, word: &str) -> Vec<&'static Pos> {
 /// 2. Build API URL and fetch JSON data
 /// 3. Parse ngram data into structured rows
 /// 4. Load dictionary for POS lookup
-/// 5. Print raw diagnostics if requested
-/// 6. Evaluate contexts across alternatives
-/// 7. Print formatted results with POS tags
-/// 8. Print prohibited contexts (discriminators)
-/// 9. Print family-level uniqueness if families enabled
+/// 5. Build a hierarchical data structure (FamilyTree -> AlternativeMap -> SideMap -> ContextSet)
+/// 6. Compare two families of alternatives using set operations (union, intersection, difference)
+/// 7. Display results showing which context words and POS tags are unique to each family
 ///
-/// TODO: Add error handling for empty results
-/// TODO: Consider adding a summary statistics section
-/// TODO: Add support for output to file (JSON, CSV, etc.)
-/// TODO: The main function is getting long - consider extracting phases
+/// The current implementation focuses on comparing exactly 2 families of alternatives,
+/// with color-coded output showing shared vs unique contexts.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cfg = cli()?;
 

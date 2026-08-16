@@ -54,7 +54,6 @@ enum NgramType {
 /// The L/R brackets handle apostrophes in words (e.g., "don't" becomes "[* don't]")
 /// NOTE: See also the special handling for hyphens in main.rs/cli()
 ///
-/// TODO: Consider adding smoothing parameter
 /// NOTE: Case-insensitive mode cannot be used in combination with wildcards
 pub fn build_url(cfg: &Cfg) -> url::Url {
     let mut url = url::Url::parse("https://books.google.com/ngrams/json").unwrap();
@@ -88,10 +87,6 @@ pub fn build_url(cfg: &Cfg) -> url::Url {
 }
 
 /// Fetches JSON data from the given URL
-///
-/// TODO: Add timeout configuration
-/// TODO: Add retry logic for network failures
-/// TODO: Consider using async reqwest for better performance
 pub fn fetch_json(url: url::Url) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
     let response = reqwest::blocking::get(url)?;
     let json = response.json::<serde_json::Value>()?;
@@ -105,11 +100,12 @@ pub fn fetch_json(url: url::Url) -> Result<serde_json::Value, Box<dyn std::error
 /// Parses Google Ngram items directly into the application's general Row format
 ///
 /// Filters out non-expansion ngrams and isolates the context words appearing
-/// before or after each alternative phrase.
+/// before or after each alternative phrase. This data is then used to build
+/// the hierarchical FamilyTree structure for analysis.
 ///
 /// # Returns
-/// A vector of general `crate::Row` structs containing the side, alternative,
-/// and context data.
+/// A vector of general `crate::Row` structs containing the family, alternative,
+/// side, and context data.
 fn parse(cfg: &Cfg, items: Vec<NgramItem>) -> Result<Vec<crate::Row>, Box<dyn std::error::Error>> {
     items
         .into_iter()
