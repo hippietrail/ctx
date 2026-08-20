@@ -58,8 +58,8 @@ use harper_core::spell::{Dictionary, FstDictionary};
 use itertools::Itertools;
 
 // Local modules
-use colour::{Colour, CYAN, GREEN, MAGENTA, ORANGE, RED, YELLOW};
-use pos::Pos;
+use colour::{CYAN, Colour, GREEN, MAGENTA, ORANGE, RED, YELLOW};
+use pos::{Pos, PosLookupResult};
 
 /// Represents which side of the target word a context appears on
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord)]
@@ -226,15 +226,28 @@ pub fn cli() -> Result<Cfg, Box<dyn std::error::Error>> {
 ///
 /// Uses the harper_core dictionary to look up word metadata
 /// and returns matching POS tags based on predefined predicates.
-fn get_poses(dict: &FstDictionary, word: &str) -> Vec<&'static Pos> {
-    dict.get_word_metadata_str(word)
-        .map_or_else(Vec::new, |md| {
-            pos::POS_DEFINITIONS
+///
+/// Explicitly distinguishes between:
+/// - Words not in the dictionary (true OOV)
+/// - Words in dictionary but matching no POS predicates
+/// - Words in dictionary with matching POS tags
+fn get_poses(dict: &FstDictionary, word: &str) -> pos::PosLookupResult {
+    match dict.get_word_metadata_str(word) {
+        None => pos::PosLookupResult::NotFound,
+        Some(md) => {
+            let matches: Vec<&'static Pos> = pos::POS_DEFINITIONS
                 .iter()
                 .filter(|&(_, pred)| pred(&md))
                 .map(|(enum_variant, _)| enum_variant)
-                .collect()
-        })
+                .collect();
+
+            if matches.is_empty() {
+                pos::PosLookupResult::FoundWithNoMatches
+            } else {
+                pos::PosLookupResult::FoundWithMatches(matches)
+            }
+        }
+    }
 }
 
 // ============================================================================
@@ -383,14 +396,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut tree = FamilyTree::default();
 
     for row in table {
-        let poses: Vec<&'static Pos> = get_poses(&dict, &row.ctx);
+        let poses: Vec<&'static Pos> = match get_poses(&dict, &row.ctx) {
+            PosLookupResult::NotFound => {
+                // Word not in dictionary - true OOV, include with empty POS
+                Vec::new()
+            }
+            PosLookupResult::FoundWithNoMatches => {
+                // Word in dictionary but matches no POS predicates
+                Vec::new()
+            }
+            PosLookupResult::FoundWithMatches(matches) => matches,
+        };
 
         // 1. Normalize the grouping key:
         // If explicit family exists, use it.
         // If None, isolate this alternative into its own unique family group!
         let family_key = match &row.fam {
             Some(fam_name) => Some(fam_name.clone()),
-            None => Some(row.alt.clone()), // Fallback to alternative name as the family name
+            None => Some(row.alt.clone()), // Fall back to alternative name as the family name
         };
 
         // 2. Build the tree with the normalized key
@@ -427,60 +450,66 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let word_set_b = fam_b.contexts_for_side(side_variant);
 
             let (word_color, pos_colour) = (YELLOW, MAGENTA);
-            let side_color = if side_variant == crate::Side::Before {
-                GREEN
-            } else {
-                CYAN
-            };
+            let side_color = [GREEN, CYAN][side_variant as usize];
             println!("=== {} {} ===", label.c(side_color), "WORDS".c(word_color));
 
             let word_union: HashSet<String> = word_set_a.union(&word_set_b).cloned().collect();
             // println!("  Union (A ∪ B): [{}]", format_set(&word_union));
 
-            let word_intersection: HashSet<String> = word_set_a.intersection(&word_set_b).cloned().collect();
+            let word_intersection: HashSet<String> =
+                word_set_a.intersection(&word_set_b).cloned().collect();
 
-            let word_diff_a: HashSet<String> = word_set_a.difference(&word_set_b).cloned().collect();
+            let word_diff_a: HashSet<String> =
+                word_set_a.difference(&word_set_b).cloned().collect();
 
-            let word_diff_b: HashSet<String> = word_set_b.difference(&word_set_a).cloned().collect();
+            let word_diff_b: HashSet<String> =
+                word_set_b.difference(&word_set_a).cloned().collect();
 
             // Let's print the union, but with different colours depending on whether the word is in both sets or only in one
             let mut combined = Vec::new();
-            for word in word_union {
-                if word_set_a.contains(&word) && word_set_b.contains(&word) {
-                    combined.push(format!("\x1b[1m{}\x1b[0m", word)); // Bold for words in both
-                } else if word_set_a.contains(&word) {
-                    combined.push(format!("\x1b[33m{}\x1b[0m", word)); // Yellow colour for words only in A
+            for word in word_union.iter().sorted_by_key(|s| s.to_lowercase()) {
+                let is_oov = dict.get_word_metadata_str(word).is_none();
+
+                if word_set_a.contains(word) && word_set_b.contains(word) {
+                    let formatted = if is_oov { format!("{}", word.d().b()) } else { format!("{}", word.b()) };
+                    combined.push(formatted);
+                } else if word_set_a.contains(word) {
+                    let formatted = if is_oov { format!("{}", word.d().c(ORANGE)) } else { format!("{}", word.c(ORANGE)) };
+                    combined.push(formatted);
                 } else {
-                    combined.push(format!("\x1b[31m{}\x1b[0m", word)); // Red colour for words only in B
+                    let formatted = if is_oov { format!("{}", word.d().c(RED)) } else { format!("{}", word.c(RED)) };
+                    combined.push(formatted);
                 }
             }
-            println!("  {}", combined.join(", "));
+            println!(" 🔤 {}", combined.join(", "));
 
             // Now let's print set a diff, then the intersection, then set b diff on one line in that order
             let mut combined_pos = Vec::new();
-            for pos in word_diff_a {
-                combined_pos.push(format!("\x1b[33m{}\x1b[0m", pos)); // Yellow colour for words only in A
+            for word in word_diff_a.iter().sorted_by_key(|s| s.to_lowercase()) {
+                let is_oov = dict.get_word_metadata_str(word).is_none();
+                let formatted = if is_oov { format!("{}", word.d().c(ORANGE)) } else { format!("{}", word.c(ORANGE)) };
+                combined_pos.push(formatted); // Yellow colour for words only in A
             }
-            for pos in word_intersection {
-                combined_pos.push(format!("\x1b[1m{}\x1b[0m", pos)); // Bold for words in both
+            for word in word_intersection.iter().sorted_by_key(|s| s.to_lowercase()) {
+                let is_oov = dict.get_word_metadata_str(word).is_none();
+                let formatted = if is_oov { format!("{}", word.d().b()) } else { format!("{}", word.b()) };
+                combined_pos.push(formatted); // Bold for words in both
             }
-            for pos in word_diff_b {
-                combined_pos.push(format!("\x1b[31m{}\x1b[0m", pos)); // Red colour for words only in B
+            for word in word_diff_b.iter().sorted_by_key(|s| s.to_lowercase()) {
+                let is_oov = dict.get_word_metadata_str(word).is_none();
+                let formatted = if is_oov { format!("{}", word.d().c(RED)) } else { format!("{}", word.c(RED)) };
+                combined_pos.push(formatted); // Red colour for words only in B
             }
-            println!("  {}", combined_pos.join(", "));
+            println!(" 🗂️ {}", combined_pos.join(", "));
 
             // --- Parts of Speech (Pos) Set Processing ---
             let pos_set_a = fam_a.poses_for_side(side_variant);
             let pos_set_b = fam_b.poses_for_side(side_variant);
 
-            println!(
-                "=== {} {} ===",
-                label.c(side_color),
-                "POS".c(pos_colour)
-            );
+            println!("=== {} {} ===", label.c(side_color), "POS".c(pos_colour));
 
             let pos_union: HashSet<&'static Pos> = pos_set_a.union(&pos_set_b).copied().collect();
-            
+
             // println!(
             //     "  POS Union ({} ∪ {}): [{}]",
             //     fam_name_a,
