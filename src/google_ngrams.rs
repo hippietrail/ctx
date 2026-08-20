@@ -124,22 +124,24 @@ fn parse(cfg: &Cfg, items: Vec<NgramItem>) -> Result<Vec<crate::Row>, Box<dyn st
             };
 
             // Match each alternative between Google Ngrams results and the config from the command line.
-            let fam = match cfg
+            let matched_alt = match cfg
                 .alternatives
                 .iter()
-                .find(|a| a.raw == alt_name)
+                .find(|a| a.jfmt == alt_name)
             {
-                Some(alt) => alt.fam.clone(),
+                Some(alt) => alt,
                 None => {
                     eprintln!("ERROR: Alternative '{}' from Google Ngrams not found in command line config", alt_name);
                     eprintln!("Google Ngrams alternative: {}", alt_name);
                     eprintln!("Config alternatives:");
                     for alt in &cfg.alternatives {
-                        eprintln!("  - {}", alt.raw);
+                        eprintln!("  - {} (raw: {})", alt.jfmt, alt.raw);
                     }
                     return Err("Alternative from Google Ngrams not found in alternatives from command line".into());
                 }
             };
+
+            let fam = matched_alt.fam.clone();
 
             let context = if is_prefix {
                 &item.ngram[..item.ngram.len() - (alt_name.len() + 1)]
@@ -155,7 +157,7 @@ fn parse(cfg: &Cfg, items: Vec<NgramItem>) -> Result<Vec<crate::Row>, Box<dyn st
 
             Ok(crate::Row {
                 fam,
-                alt: alt_name.to_string(),
+                alt: matched_alt.raw.clone(),
                 side,
                 ctx: context.to_string(),
             })
