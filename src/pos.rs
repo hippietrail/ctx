@@ -22,7 +22,7 @@ impl PosLookupResult {
     /// - `NotFound` → empty Vec
     /// - `FoundWithNoMatches` → empty Vec  
     /// - `FoundWithMatches` → the Vec of matches
-    pub fn into_poses(self) -> Vec<&'static Pos> {
+    pub fn _into_poses(self) -> Vec<&'static Pos> {
         match self {
             PosLookupResult::NotFound => Vec::new(),
             PosLookupResult::FoundWithNoMatches => Vec::new(),
@@ -31,12 +31,12 @@ impl PosLookupResult {
     }
 
     /// Returns true if the word was found in the dictionary (regardless of matches)
-    pub fn is_found(&self) -> bool {
+    pub fn _is_found(&self) -> bool {
         !matches!(self, PosLookupResult::NotFound)
     }
 
     /// Returns true if the word was not found in the dictionary (true OOV)
-    pub fn is_not_found(&self) -> bool {
+    pub fn _is_not_found(&self) -> bool {
         matches!(self, PosLookupResult::NotFound)
     }
 }

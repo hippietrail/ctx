@@ -58,8 +58,10 @@ pub const _TOO_RED: (u8, u8, u8) = (200, 0, 0);
 pub const _BRIGHT_CORAL: (u8, u8, u8) = (255, 107, 107);
 pub const _VIBRANT_CRIMSON: (u8, u8, u8) = (0xFF, 0x45, 0x3A);
 pub const PASTEL_RED: (u8, u8, u8) = (0xF8, 0x71, 0x71);
+pub const PASTEL_BLUE: (u8, u8, u8) = (0x93, 0xC3, 0xF5);
 
 pub const RED: (u8, u8, u8) = PASTEL_RED;
+pub const BLUE: (u8, u8, u8) = PASTEL_BLUE;
 pub const ORANGE: (u8, u8, u8) = (200, 150, 0);
 pub const GREEN: (u8, u8, u8) = (0, 200, 0);
 pub const CYAN: (u8, u8, u8) = (0, 200, 200);
