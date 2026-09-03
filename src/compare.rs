@@ -7,8 +7,8 @@ use itertools::Itertools;
 
 // 3. Local Crate Imports
 use crate::colour::{BLUE, CYAN, Colour, GREEN, MAGENTA, ORANGE, RED, YELLOW};
+use crate::pos::Pos; // Fixed path: assuming Pos is inside pos
 use crate::types::FamilyTree; // Fixed path: assuming FamilyTree is inside types
-use crate::pos::Pos;           // Fixed path: assuming Pos is inside pos
 
 pub fn compare_three(dict: &FstDictionary, tree: FamilyTree) {
     // 1. Extract family names and their corresponding AlternativeMaps in sorted order
@@ -270,37 +270,70 @@ pub fn compare_two(dict: &FstDictionary, tree: FamilyTree) {
         println!(" {label} {}: {}", fam_name_b.c(RED), b_not_a.join(", "));
 
         // --- Parts of Speech (Pos) Set Processing ---
-        let pos_set_a = fam_a.poses_for_side(side_variant);
-        let pos_set_b = fam_b.poses_for_side(side_variant);
+        // Build the counting structures: POS → (canonical word → count)
+        let pos_counts_a = fam_a.pos_to_word_counts_for_side(side_variant, dict);
+        let pos_counts_b = fam_b.pos_to_word_counts_for_side(side_variant, dict);
+
+        // Get all unique POS
+        let all_pos: HashSet<&'static Pos> = pos_counts_a
+            .keys()
+            .chain(pos_counts_b.keys())
+            .copied()
+            .collect();
 
         println!("=== {} {} ===", label.c(side_color), "POS".c(pos_colour));
 
-        let pos_union: HashSet<&'static Pos> = pos_set_a.union(&pos_set_b).copied().collect();
+        // For each POS, show top 3 words by count for each family
+        for pos in all_pos.iter().sorted() {
+            let words_a = pos_counts_a.get(pos);
+            let words_b = pos_counts_b.get(pos);
 
-        // POS intersection
-        let _pos_intersection: HashSet<&'static Pos> =
-            pos_set_a.intersection(&pos_set_b).copied().collect();
+            // Skip if no words for this POS in either family
+            let has_a = words_a.map_or(false, |m| !m.is_empty());
+            let has_b = words_b.map_or(false, |m| !m.is_empty());
 
-        // POS difference A∖B
-        let _pos_diff_a: HashSet<&'static Pos> =
-            pos_set_a.difference(&pos_set_b).copied().collect();
+            if !has_a && !has_b {
+                continue;
+            }
 
-        // POS difference B∖A
-        let _pos_diff_b: HashSet<&'static Pos> =
-            pos_set_b.difference(&pos_set_a).copied().collect();
+            let pos_name = format!("{:?}", pos);
 
-        // POS combined
-        let mut combined = Vec::new();
-        for pos in pos_union {
-            if pos_set_a.contains(&pos) && pos_set_b.contains(&pos) {
-                combined.push(format!("\x1b[1m{:?}\x1b[0m", pos)); // Bold for pos in both
-            } else if pos_set_a.contains(&pos) {
-                combined.push(format!("\x1b[33m{:?}\x1b[0m", pos)); // Yellow colour for pos only in A
-            } else {
-                combined.push(format!("\x1b[31m{:?}\x1b[0m", pos)); // Red colour for pos only in B
+            // Show family A's words
+            if let Some(wa) = words_a {
+                if !wa.is_empty() {
+                    let top_a: Vec<_> = wa
+                        .iter()
+                        .sorted_by(|a, b| b.1.cmp(a.1)) // Sort by count descending
+                        .take(3)
+                        .collect();
+
+                    let words_a_str = top_a
+                        .iter()
+                        .map(|(word, count)| format_pos_w_count(word, count))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    println!(
+                        " {label} {pos_name} {}: {}",
+                        fam_name_a.c(ORANGE),
+                        words_a_str
+                    );
+                }
+            }
+
+            // Show family B's words
+            if let Some(wb) = words_b {
+                if !wb.is_empty() {
+                    let top_b: Vec<_> = wb.iter().sorted_by(|a, b| b.1.cmp(a.1)).take(3).collect();
+
+                    let words_b_str = top_b
+                        .iter()
+                        .map(|(word, count)| format_pos_w_count(word, count))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    println!(" {label} {pos_name} {}: {}", fam_name_b.c(RED), words_b_str);
+                }
             }
         }
-        println!("  {}", combined.join(", "));
     };
 
     // 3. Execute everything seamlessly for the LEFT side
@@ -310,6 +343,18 @@ pub fn compare_two(dict: &FstDictionary, tree: FamilyTree) {
     // 4. Execute everything seamlessly for the RIGHT side
     // analyze_side("RIGHT", crate::Side::After);
     analyze_side("After", crate::Side::After);
+}
+
+fn format_pos_w_count(word: &str, count: &usize) -> String {
+    const SUPERSCRIPTS: [char; 10] = ['⁰', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹'];
+
+    let superscript = count
+        .to_string()
+        .chars()
+        .map(|c| SUPERSCRIPTS[(c as usize) - ('0' as usize)])
+        .collect::<String>();
+
+    format!("{word}{superscript}")
 }
 
 // Wrapper that converts string to &[char] for Harper's API then back to String

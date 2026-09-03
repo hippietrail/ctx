@@ -10,6 +10,15 @@ use std::{
 
 // 2. Local Crate Imports
 use crate::Pos;
+use harper_core::spell::{Dictionary, FstDictionary};
+
+// Helper function to canonicalize word spelling
+fn get_correct_capitalization_of_string(dict: &FstDictionary, s: &str) -> String {
+    let s_chars: Vec<char> = s.chars().collect();
+    dict.get_correct_capitalization_of(&s_chars)
+        .map(|v| v.iter().collect::<String>())
+        .unwrap_or_else(|| s.to_string())
+}
 
 // ============================================================================
 // DATA STRUCTURES
@@ -67,6 +76,36 @@ impl AlternativeMap {
             set.extend(side_map.poses_for_side(side));
         }
         set
+    }
+
+    /// Builds a counting structure: POS → (canonical word → occurrence count)
+    /// This counts how many times each word appears with each POS across all alternatives,
+    /// using canonicalized spelling to merge case variants.
+    pub fn pos_to_word_counts_for_side(
+        &self,
+        side: crate::Side,
+        dict: &FstDictionary,
+    ) -> HashMap<&'static Pos, HashMap<String, usize>> {
+        let mut result: HashMap<&'static Pos, HashMap<String, usize>> = HashMap::new();
+
+        for side_map in self.values() {
+            if let Some(ctx_set) = side_map.get(&side) {
+                for (word, pos_set) in ctx_set.iter() {
+                    // Canonicalize the word before counting
+                    let canonical_word = get_correct_capitalization_of_string(dict, word);
+
+                    for &pos in pos_set {
+                        result
+                            .entry(pos)
+                            .or_default()
+                            .entry(canonical_word.clone())
+                            .and_modify(|count| *count += 1)
+                            .or_insert(1);
+                    }
+                }
+            }
+        }
+        result
     }
 }
 
