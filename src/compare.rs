@@ -8,7 +8,7 @@ use itertools::Itertools;
 // 3. Local Crate Imports
 use crate::colour::{BLUE, CYAN, Colour, GREEN, MAGENTA, ORANGE, RED, YELLOW};
 use crate::pos::Pos; // Fixed path: assuming Pos is inside pos
-use crate::types::FamilyTree; // Fixed path: assuming FamilyTree is inside types
+use crate::types::{FamilyTree, get_correct_capitalization_of_string}; // Fixed path: assuming FamilyTree is inside types
 
 pub fn compare_three(dict: &FstDictionary, tree: FamilyTree) {
     // 1. Extract family names and their corresponding AlternativeMaps in sorted order
@@ -59,76 +59,32 @@ pub fn compare_three(dict: &FstDictionary, tree: FamilyTree) {
             .cloned()
             .collect();
 
-        // Helper to pull the true original case variant out of the source text data
-        let get_raw_input_word = |lowercase_word: &str| -> String {
-            if let Some(orig) = original_set_a.get(lowercase_word) {
-                return orig.clone();
-            }
-            if let Some(orig) = original_set_b.get(lowercase_word) {
-                return orig.clone();
-            }
-            if let Some(orig) = original_set_c.get(lowercase_word) {
-                return orig.clone();
-            }
-            lowercase_word.to_string()
-        };
+
 
         let mut combined_pos = Vec::new();
 
         // Group 1: Unique to A (Words only in A, not in B or C)
         for low_word in unique_a.iter().sorted() {
-            let display_word = get_raw_input_word(low_word);
-            let is_oov = dict.get_word_metadata_str(&display_word).is_none();
-            let canonical_word = get_correct_capitalization_of_string(dict, &display_word);
-
-            let formatted = if is_oov {
-                format!("{}", canonical_word.d().c(ORANGE))
-            } else {
-                format!("{}", canonical_word.c(ORANGE))
-            };
-            combined_pos.push(formatted);
+            let display_word = get_raw_input_word(low_word, &[&original_set_a, &original_set_b, &original_set_c]);
+            combined_pos.push(format_word(dict, &display_word, ORANGE));
         }
 
         // Group 2: Unique to B (Words only in B, not in A or C)
         for low_word in unique_b.iter().sorted() {
-            let display_word = get_raw_input_word(low_word);
-            let is_oov = dict.get_word_metadata_str(&display_word).is_none();
-            let canonical_word = get_correct_capitalization_of_string(dict, &display_word);
-
-            let formatted = if is_oov {
-                format!("{}", canonical_word.d().c(RED))
-            } else {
-                format!("{}", canonical_word.c(RED))
-            };
-            combined_pos.push(formatted);
+            let display_word = get_raw_input_word(low_word, &[&original_set_a, &original_set_b, &original_set_c]);
+            combined_pos.push(format_word(dict, &display_word, RED));
         }
 
         // Group 3: Unique to C (Words only in C, not in A or B)
         for low_word in unique_c.iter().sorted() {
-            let display_word = get_raw_input_word(low_word);
-            let is_oov = dict.get_word_metadata_str(&display_word).is_none();
-            let canonical_word = get_correct_capitalization_of_string(dict, &display_word);
-
-            let formatted = if is_oov {
-                format!("{}", canonical_word.d().c(BLUE))
-            } else {
-                format!("{}", canonical_word.c(BLUE))
-            };
-            combined_pos.push(formatted);
+            let display_word = get_raw_input_word(low_word, &[&original_set_a, &original_set_b, &original_set_c]);
+            combined_pos.push(format_word(dict, &display_word, BLUE));
         }
 
         // Group 4: Shared by all three
         for low_word in intersection_all.iter().sorted() {
-            let display_word = get_raw_input_word(low_word);
-            let is_oov = dict.get_word_metadata_str(&display_word).is_none();
-            let canonical_word = get_correct_capitalization_of_string(dict, &display_word);
-
-            let formatted = if is_oov {
-                format!("{}", canonical_word.d().b())
-            } else {
-                format!("{}", canonical_word.b())
-            };
-            combined_pos.push(formatted);
+            let display_word = get_raw_input_word(low_word, &[&original_set_a, &original_set_b, &original_set_c]);
+            combined_pos.push(format_word_bold(dict, &display_word));
         }
         println!(" 🗂️ {}", combined_pos.join(", "));
 
@@ -208,16 +164,7 @@ pub fn compare_two(dict: &FstDictionary, tree: FamilyTree) {
         let word_diff_a: HashSet<String> = word_set_a.difference(&word_set_b).cloned().collect();
         let word_diff_b: HashSet<String> = word_set_b.difference(&word_set_a).cloned().collect();
 
-        // Helper to pull the true original case variant out of the source text data
-        let get_raw_input_word = |lowercase_word: &str| -> String {
-            if let Some(orig) = original_set_a.get(lowercase_word) {
-                return orig.clone();
-            }
-            if let Some(orig) = original_set_b.get(lowercase_word) {
-                return orig.clone();
-            }
-            lowercase_word.to_string()
-        };
+
 
         // let mut combined_pos = Vec::new();
         let mut a_not_b = Vec::new();
@@ -226,44 +173,20 @@ pub fn compare_two(dict: &FstDictionary, tree: FamilyTree) {
 
         // Group 1: Diff A (Words unique to A)
         for low_word in word_diff_a.iter().sorted() {
-            let display_word = get_raw_input_word(low_word);
-            let is_oov = dict.get_word_metadata_str(&display_word).is_none();
-            let canonical_word = get_correct_capitalization_of_string(dict, &display_word);
-
-            let formatted = if is_oov {
-                format!("{}", canonical_word.d().c(ORANGE))
-            } else {
-                format!("{}", canonical_word.c(ORANGE))
-            };
-            a_not_b.push(formatted);
+            let display_word = get_raw_input_word(low_word, &[&original_set_a, &original_set_b]);
+            a_not_b.push(format_word(dict, &display_word, ORANGE));
         }
 
         // Group 2: Intersection (Words shared by both)
         for w in word_intersection.iter().sorted() {
-            let display_word = get_raw_input_word(w);
-            let is_oov = dict.get_word_metadata_str(&display_word).is_none();
-            let canon = get_correct_capitalization_of_string(dict, &display_word);
-
-            let formatted = if is_oov {
-                format!("{}", canon.d().b())
-            } else {
-                format!("{}", canon.b())
-            };
-            both.push(formatted);
+            let display_word = get_raw_input_word(w, &[&original_set_a, &original_set_b]);
+            both.push(format_word_bold(dict, &display_word));
         }
 
         // Group 3: Diff B (Words unique to B)
         for w in word_diff_b.iter().sorted() {
-            let display_word = get_raw_input_word(w);
-            let is_oov = dict.get_word_metadata_str(&display_word).is_none();
-            let canonical_word = get_correct_capitalization_of_string(dict, &display_word);
-
-            let formatted = if is_oov {
-                format!("{}", canonical_word.d().c(RED))
-            } else {
-                format!("{}", canonical_word.c(RED))
-            };
-            b_not_a.push(formatted);
+            let display_word = get_raw_input_word(w, &[&original_set_a, &original_set_b]);
+            b_not_a.push(format_word(dict, &display_word, RED));
         }
         // println!(" 🗂️ {}", [a_not_b, both, b_not_a].join(", "));
         println!(" {label} {}: {}", fam_name_a.c(ORANGE), a_not_b.join(", "));
@@ -345,6 +268,41 @@ pub fn compare_two(dict: &FstDictionary, tree: FamilyTree) {
     analyze_side("After", crate::Side::After);
 }
 
+fn format_word(dict: &FstDictionary, word: &str, color: (u8, u8, u8)) -> String {
+    let is_oov = dict.get_word_metadata_str(word).is_none();
+    let canonical_word = get_correct_capitalization_of_string(dict, word);
+
+    if is_oov {
+        format!("«{}»", canonical_word.d().c(color))
+    } else {
+        format!("{}", canonical_word.c(color))
+    }
+}
+
+fn format_word_bold(dict: &FstDictionary, word: &str) -> String {
+    let is_oov = dict.get_word_metadata_str(word).is_none();
+    let canonical_word = get_correct_capitalization_of_string(dict, word);
+
+    if is_oov {
+        format!("«{}»", canonical_word.d().b())
+    } else {
+        format!("{}", canonical_word.b())
+    }
+}
+
+/// Helper to find the original case variant of a word from source text data
+fn get_raw_input_word<'a>(
+    lowercase_word: &str,
+    original_sets: &'a [&HashSet<String>],
+) -> String {
+    for set in original_sets {
+        if let Some(orig) = set.get(lowercase_word) {
+            return orig.clone();
+        }
+    }
+    lowercase_word.to_string()
+}
+
 fn format_pos_w_count(word: &str, count: &usize) -> String {
     const SUPERSCRIPTS: [char; 10] = ['⁰', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹'];
 
@@ -357,12 +315,4 @@ fn format_pos_w_count(word: &str, count: &usize) -> String {
     format!("{word}{superscript}")
 }
 
-// Wrapper that converts string to &[char] for Harper's API then back to String
-fn get_correct_capitalization_of_string(dict: &FstDictionary, s: &str) -> String {
-    let s_chars: Vec<char> = s.chars().collect();
-    dict.get_correct_capitalization_of(&s_chars)
-        // If a match is found, return it cleanly as a String
-        .map(|v| v.iter().collect::<String>())
-        // If no match is found, wrap the original string in quotes
-        .unwrap_or_else(|| format!("«{}»", s))
-}
+

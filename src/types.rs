@@ -13,7 +13,7 @@ use crate::Pos;
 use harper_core::spell::{Dictionary, FstDictionary};
 
 // Helper function to canonicalize word spelling
-fn get_correct_capitalization_of_string(dict: &FstDictionary, s: &str) -> String {
+pub fn get_correct_capitalization_of_string(dict: &FstDictionary, s: &str) -> String {
     let s_chars: Vec<char> = s.chars().collect();
     dict.get_correct_capitalization_of(&s_chars)
         .map(|v| v.iter().collect::<String>())
