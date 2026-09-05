@@ -54,12 +54,13 @@ pub enum Pos {
     Verb,
 }
 
-pub struct _POSInfo {
+#[allow(dead_code)]
+pub struct POSInfo {
     pub _name: &'static str,
     pub ord: usize,
     pub _ptb: &'static str, // Penn Treebank
     pub letter: &'static str,
-    pub _emoji: &'static str,
+    pub emoji: &'static str,
     pub _gng: &'static str, // Google Ngram Viewer
 }
 
@@ -75,77 +76,77 @@ pub const POS_DEFINITIONS: &[(Pos, PosPredicate)] = &[
     /* #8 */ (Pos::Conjunction, DictWordMetadata::is_conjunction),
 ];
 
-pub fn _pos_info(pos: &Pos) -> _POSInfo {
+pub fn pos_info(pos: &Pos) -> POSInfo {
     match pos {
-        Pos::Noun => _POSInfo {
+        Pos::Noun => POSInfo {
             letter: "N",
             ord: 2,
             _ptb: "NN",
-            _emoji: "📦",
+            emoji: "📦",
             _name: "noun",
             _gng: "_NOUN_",
         },
-        Pos::ProperNoun => _POSInfo {
+        Pos::ProperNoun => POSInfo {
             letter: "O",
             ord: 2,
             _ptb: "NNP",
-            _emoji: "📛",
+            emoji: "📛",
             _name: "proper noun",
             _gng: "_PROPN_",
         },
-        Pos::Verb => _POSInfo {
+        Pos::Verb => POSInfo {
             letter: "V",
             ord: 4,
             _ptb: "VB",
-            _emoji: "🏃",
+            emoji: "🏃",
             _name: "verb",
             _gng: "_VERB_",
         },
-        Pos::Adjective => _POSInfo {
+        Pos::Adjective => POSInfo {
             letter: "J",
             ord: 5,
             _ptb: "JJ",
-            _emoji: "🌈",
+            emoji: "🌈",
             _name: "adjective",
             _gng: "_ADJ_",
         },
-        Pos::Adverb => _POSInfo {
+        Pos::Adverb => POSInfo {
             letter: "R",
             ord: 6,
             _ptb: "RB",
-            _emoji: "🤷",
+            emoji: "🤷",
             _name: "adverb",
             _gng: "_ADV_",
         },
-        Pos::Conjunction => _POSInfo {
+        Pos::Conjunction => POSInfo {
             letter: "C",
             ord: 8,
             _ptb: "CC",
-            _emoji: "🔗",
+            emoji: "🔗",
             _name: "conjunction",
             _gng: "_CONJ_",
         },
-        Pos::Determiner => _POSInfo {
+        Pos::Determiner => POSInfo {
             letter: "D",
             ord: 1,
             _ptb: "DT",
-            _emoji: "👉",
+            emoji: "👉",
             _name: "determiner",
             _gng: "_DET_",
         },
-        Pos::Preposition => _POSInfo {
+        Pos::Preposition => POSInfo {
             letter: "P",
             ord: 7,
             _ptb: "IN",
-            _emoji: "📥",
+            emoji: "📥",
             _name: "preposition",
             _gng: "_ADP_",
         },
-        Pos::Pronoun => _POSInfo {
+        Pos::Pronoun => POSInfo {
             letter: "I",
             ord: 3,
             _ptb: "PRP",
-            _emoji: "👤",
+            emoji: "👤",
             _name: "pronoun",
             _gng: "_PRON_",
         },

@@ -8,16 +8,17 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-// 2. Local Crate Imports
-use crate::Pos;
+// 2. External Crate Imports
 use harper_core::spell::{Dictionary, FstDictionary};
 
+// 3. Local Crate Imports
+use crate::Pos;
+
 // Helper function to canonicalize word spelling
-fn get_correct_capitalization_of_string(dict: &FstDictionary, s: &str) -> String {
-    let s_chars: Vec<char> = s.chars().collect();
-    dict.get_correct_capitalization_of(&s_chars)
-        .map(|v| v.iter().collect::<String>())
-        .unwrap_or_else(|| s.to_string())
+fn get_canon_case(dict: &FstDictionary, s: &str) -> (bool, String) {
+    dict.get_correct_capitalization_of(&s.chars().collect::<Vec<char>>())
+        .map(|v| (true, v.iter().collect::<String>()))
+        .unwrap_or_else(|| (false, s.to_string()))
 }
 
 // ============================================================================
@@ -71,11 +72,9 @@ impl AlternativeMap {
 
     /// Parameterized method to collect unique POS references for a specific side.
     pub fn poses_for_side(&self, side: crate::Side) -> HashSet<&'static Pos> {
-        let mut set = HashSet::new();
-        for side_map in self.values() {
-            set.extend(side_map.poses_for_side(side));
-        }
-        set
+        self.values()
+            .flat_map(|side_map| side_map.poses_for_side(side))
+            .collect()
     }
 
     /// Builds a counting structure: POS → (canonical word → occurrence count)
@@ -86,26 +85,21 @@ impl AlternativeMap {
         side: crate::Side,
         dict: &FstDictionary,
     ) -> HashMap<&'static Pos, HashMap<String, usize>> {
-        let mut result: HashMap<&'static Pos, HashMap<String, usize>> = HashMap::new();
-
-        for side_map in self.values() {
-            if let Some(ctx_set) = side_map.get(&side) {
-                for (word, pos_set) in ctx_set.iter() {
-                    // Canonicalize the word before counting
-                    let canonical_word = get_correct_capitalization_of_string(dict, word);
-
-                    for &pos in pos_set {
-                        result
-                            .entry(pos)
-                            .or_default()
-                            .entry(canonical_word.clone())
-                            .and_modify(|count| *count += 1)
-                            .or_insert(1);
-                    }
-                }
-            }
-        }
-        result
+        self.values()
+            .filter_map(|side_map| side_map.get(&side))
+            .flat_map(|ctx_set| ctx_set.iter())
+            .flat_map(|(word, pos_set)| {
+                let (_, canonical) = get_canon_case(dict, word);
+                pos_set.iter().map(move |&pos| (pos, canonical.clone()))
+            })
+            .fold(HashMap::new(), |mut acc, (pos, canonical)| {
+                acc.entry(pos)
+                    .or_default()
+                    .entry(canonical)
+                    .and_modify(|count| *count += 1)
+                    .or_insert(1);
+                acc
+            })
     }
 }
 
@@ -135,11 +129,9 @@ impl ContextSet {
     }
 
     pub fn all_poses(&self) -> HashSet<&'static Pos> {
-        let mut set = HashSet::new();
-        for pos_set in self.values() {
-            set.extend(pos_set.iter().copied());
-        }
-        set
+        self.values()
+            .flat_map(|pos_set| pos_set.iter().copied())
+            .collect()
     }
 }
 
