@@ -72,8 +72,11 @@ cargo run --release "shopping center" "shopping centre" "shopping mall" mall
 # Filter data from a specific year onwards
 cargo run --release --since=1968 foo bar
 
-# Family grouping for comparing related alternatives
-cargo run --release -f=foo foos foo bar
+# Family grouping for comparing related alternatives (bare -f sets family and includes first term)
+cargo run --release -f foo foos -f bar bars
+
+# Symbolic family names (without querying the family name itself)
+cargo run --release -f=US color theater -f=UK colour theatre
 
 # Build and run
 cargo build --release
@@ -84,10 +87,12 @@ cargo run --release -- term1 term2 term3
 
 - `[terms...]` - The confusable terms or phrases to analyze (space-separated, use quotes for multi-word phrases)
 - `--debug`, `-d` - Enable debug mode (shows query content and family assignments)
-- `--family=<name>`, `--fam=<name>`, `-f=<name>` - Set family for subsequent alternatives (for comparing groups of related terms)
+- `--family <term>`, `--fam <term>`, `-f <term>` - Start a family named `<term>` and include `<term>` as its first alternative
+- `--family=<name>`, `--fam=<name>`, `-f=<name>` - Set a symbolic family label for subsequent alternatives
+- `--expand-families` - Automatically generate case variants (Sentence case, Title Case, ALL CAPS) for each alternative
 - `--since=<year>`, `--since-year=<year>` - Filter data from a specific year onwards (must be exactly 4 digits)
 
-Note: The current implementation requires exactly 2 families for comparison. If no families are specified, each alternative becomes its own family.
+Note: The current implementation requires exactly 2 or 3 families for comparison. If no families are specified, each alternative becomes its own family.
 
 ## Output
 

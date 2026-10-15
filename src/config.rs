@@ -19,6 +19,55 @@ pub struct Cfg {
     pub since_year: Option<[char; 4]>,
 }
 
+impl Cfg {
+    pub fn add_alternative(&mut self, text: &str, family: Option<String>) {
+        if text.contains('-') {
+            // Hyphenated phrases: replace hyphens with " - " for Ngram JSON API compatibility
+            // NOTE: See also the special handling for apostrophes in google_ngrams.rs/build_url()
+            self.alternatives.push(Alternative {
+                raw: text.to_string(),
+                jfmt: text.split('-').join(" - "),
+                fam: family,
+            });
+        } else if text.contains('\'') {
+            // Special handling when any word starts or ends with an apostrophe, such as 'tis or 'nother
+            // NOTE: See also the special handling for apostrophes in google_ngrams.rs/build_url()
+            let jfmt = text
+                .split(' ')
+                .map(|part| {
+                    if let Some(w) = part.strip_prefix('\'') {
+                        format!("' {w}")
+                    } else if let Some(w) = part.strip_suffix('\'') {
+                        format!("{w} '")
+                    } else {
+                        part.to_string()
+                    }
+                })
+                .collect::<Vec<String>>()
+                .join(" ");
+            self.alternatives.push(Alternative {
+                raw: jfmt.clone(),
+                jfmt,
+                fam: family,
+            });
+        } else {
+            // Simple words: use as-is
+            if self.debug {
+                if let Some(ref fam) = family {
+                    println!("👉Word: {}::{}", fam, text);
+                } else {
+                    println!("👉Word: {}", text);
+                }
+            }
+            self.alternatives.push(Alternative {
+                raw: text.to_string(),
+                jfmt: text.to_string(),
+                fam: family,
+            });
+        }
+    }
+}
+
 // ============================================================================
 // COMMAND-LINE INTERFACE
 // ============================================================================
@@ -27,7 +76,8 @@ pub struct Cfg {
 ///
 /// Supported arguments:
 /// - `--raw`: Enable raw diagnostic output
-/// - `--family=<name>`, `--fam=<name>`, `-f=<name>`: Set family for subsequent alternatives
+/// - `-f <first_alt>`, `--fam <first_alt>`, `--family <first_alt>`: Start family and include first alternative
+/// - `-f=<name>`, `--fam=<name>`, `--family=<name>`: Set symbolic family label for subsequent alternatives
 pub fn cli() -> Result<Cfg, Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().skip(1).collect();
     let mut cfg = Cfg {
@@ -40,12 +90,33 @@ pub fn cli() -> Result<Cfg, Box<dyn std::error::Error>> {
 
     let mut family = None;
     let mut expand_families = false;
+    let mut expect_family_head = false;
 
     for arg in args {
+        if expect_family_head {
+            if arg.starts_with('-') {
+                return Err(format!(
+                    "Expected alternative following -f / --family, found option '{}'",
+                    arg
+                )
+                .into());
+            }
+            family = Some(arg.clone());
+            if cfg.debug {
+                println!("👉Family: {}", arg);
+            }
+            cfg.add_alternative(&arg, family.clone());
+            expect_family_head = false;
+            continue;
+        }
+
         if arg == "--raw" {
             cfg.raw = true;
         } else if ["--debug", "-d"].contains(&arg.as_str()) {
             cfg.debug = true;
+        } else if ["--family", "--fam", "-f"].contains(&arg.as_str()) {
+            expect_family_head = true;
+            cfg.has_families = true;
         } else if ["--family=", "--fam=", "-f="]
             .iter()
             .any(|p| arg.starts_with(p))
@@ -57,8 +128,6 @@ pub fn cli() -> Result<Cfg, Box<dyn std::error::Error>> {
             if cfg.debug {
                 if let Some(f) = &family {
                     println!("👉Family: {}", f);
-                } else {
-                    unreachable!()
                 }
             }
             cfg.has_families = true;
@@ -78,50 +147,13 @@ pub fn cli() -> Result<Cfg, Box<dyn std::error::Error>> {
             expand_families = true;
         } else if arg.starts_with('-') {
             return Err(format!("Unknown option: {}", arg).into());
-        } else if arg.contains('-') {
-            // Hyphenated phrases: replace hyphens with " - " for Ngram JSON API compatibility
-            // NOTE: See also the special handling for apostrophes in google_ngrams.rs/build_url()
-            cfg.alternatives.push(Alternative {
-                raw: arg.clone(),
-                jfmt: arg.split('-').join(" - "),
-                fam: family.clone(),
-            });
-        } else if arg.contains('\'') {
-            // Special handling when any word starts or ends with an apostrophe, such as 'tis or 'nother
-            // NOTE: See also the special handling for apostrophes in google_ngrams.rs/build_url()
-            let jfmt = arg
-                .split(' ')
-                .map(|part| {
-                    if let Some(w) = part.strip_prefix('\'') {
-                        format!("' {w}")
-                    } else if let Some(w) = part.strip_suffix('\'') {
-                        format!("{w} '")
-                    } else {
-                        part.to_string()
-                    }
-                })
-                .collect::<Vec<String>>()
-                .join(" ");
-            cfg.alternatives.push(Alternative {
-                raw: jfmt.clone(),
-                jfmt,
-                fam: family.clone(),
-            });
         } else {
-            // Simple words: use as-is
-            if cfg.debug {
-                if let Some(family) = &family {
-                    println!("👉Word: {}::{}", family, arg);
-                } else {
-                    println!("👉Word: {}", arg);
-                }
-            }
-            cfg.alternatives.push(Alternative {
-                raw: arg.clone(),
-                jfmt: arg.clone(),
-                fam: family.clone(),
-            });
+            cfg.add_alternative(&arg, family.clone());
         }
+    }
+
+    if expect_family_head {
+        return Err("Expected alternative following -f / --family flag at end of arguments".into());
     }
 
     
