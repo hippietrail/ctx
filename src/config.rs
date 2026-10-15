@@ -17,6 +17,7 @@ pub struct Cfg {
     pub alternatives: Vec<Alternative>,
     pub has_families: bool,
     pub since_year: Option<[char; 4]>,
+    pub expand_families: bool,
 }
 
 impl Cfg {
@@ -86,10 +87,10 @@ pub fn cli() -> Result<Cfg, Box<dyn std::error::Error>> {
         alternatives: Vec::new(),
         has_families: false,
         since_year: None,
+        expand_families: false,
     };
 
     let mut family = None;
-    let mut expand_families = false;
     let mut expect_family_head = false;
 
     for arg in args {
@@ -144,7 +145,7 @@ pub fn cli() -> Result<Cfg, Box<dyn std::error::Error>> {
                 _ => return Err("Year must be exactly 4 digits".into()),
             };
         } else if arg == "--expand-families" {
-            expand_families = true;
+            cfg.expand_families = true;
         } else if arg.starts_with('-') {
             return Err(format!("Unknown option: {}", arg).into());
         } else {
@@ -155,181 +156,6 @@ pub fn cli() -> Result<Cfg, Box<dyn std::error::Error>> {
     if expect_family_head {
         return Err("Expected alternative following -f / --family flag at end of arguments".into());
     }
-
-    
-    if expand_families {
-        let mut xpanded = Vec::<Alternative>::new();
-        // A HashSet to keep track of strings we've already added
-        let mut seen = std::collections::HashSet::new();
-
-        for alt in cfg.alternatives.iter() {
-            let (raw, fam): (&String, &Option<String>) = (&alt.raw, &alt.fam);
-            
-            // Split into owned strings so we can manipulate and reuse them
-            let parts: Vec<String> = raw.split(&[' ', '-'][..])
-                .map(|s| s.to_string())
-                .collect();
-
-            if parts.is_empty() || parts[0].is_empty() {
-                continue;
-            }
-
-            // --- 1. Sentence-capitalized version ---
-            let mut sentence_chars = parts[0].chars();
-            let first_part_titlecase = match sentence_chars.next() {
-                None => String::new(),
-                Some(first) => first.to_uppercase().collect::<String>() + sentence_chars.as_str(),
-            };
-            
-            // Recombine the first titlecase word with the rest of the original words
-            let mut sentence_version = first_part_titlecase;
-            if parts.len() > 1 {
-                sentence_version.push(' ');
-                sentence_version.push_str(&parts[1..].join(" "));
-            }
-
-            if seen.insert(sentence_version.clone()) {
-                if cfg.debug {
-                    println!("🧩 SC {}", sentence_version);
-                }
-                xpanded.push(Alternative {
-                    raw: sentence_version.clone(),
-                    jfmt: sentence_version,
-                    fam: fam.clone(),
-                });
-            }
-
-            // --- 2. Each word in Titlecase version ---
-            let titlecase_version = parts.iter()
-                .map(|word| {
-                    let mut chars = word.chars();
-                    match chars.next() {
-                        None => String::new(),
-                        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-                    }
-                })
-                .collect::<Vec<String>>()
-                .join(" ");
-
-            if seen.insert(titlecase_version.clone()) {
-                if cfg.debug {
-                    println!("🧩 TC {}", titlecase_version);
-                }
-                xpanded.push(Alternative {
-                    raw: titlecase_version.clone(),
-                    jfmt: titlecase_version,
-                    fam: fam.clone(),
-                });
-            }
-
-            // --- 3. Each word in ALL CAPS version ---
-            let all_caps_version = parts.iter()
-                .map(|word| word.to_uppercase())
-                .collect::<Vec<String>>()
-                .join(" ");
-
-            if seen.insert(all_caps_version.clone()) {
-                if cfg.debug {
-                    println!("🧩 AC {}", all_caps_version);
-                }
-                xpanded.push(Alternative {
-                    raw: all_caps_version.clone(),
-                    jfmt: all_caps_version,
-                    fam: fam.clone(),
-                });
-            }
-        }
-        
-        // dynamic assignment or update back to cfg goes here
-        for x in xpanded {
-            // stick the ones we made into cfg.alternatives
-            cfg.alternatives.push(Alternative {
-                raw: x.raw,
-                jfmt: x.jfmt,
-                fam: x.fam,
-            });
-        }
-    }
-
-    //     if expand_families {
-    //     let mut xpanded = Vec::new();
-    //     let mut seen = std::collections::HashSet::new();
-
-    //     let mut push_expanded = |variant: String, fam: Option<String>, debug: bool, tag: &str| {
-    //         if seen.insert(variant.clone()) {
-    //             if debug {
-    //                 println!("🧩 {} {}", tag, variant);
-    //             }
-    //             xpanded.push(Alternative {
-    //                 raw: variant.clone(),
-    //                 jfmt: variant,
-    //                 fam,
-    //             });
-    //         }
-    //     };
-
-    //     for alt in &cfg.alternatives {
-    //         if alt.raw.is_empty() {
-    //             continue;
-    //         }
-
-    //         // Split into structural blocks of alphanumeric text vs non-alphanumeric separators
-    //         let mut words_and_delims = Vec::new();
-    //         let mut current = String::new();
-    //         let mut is_alphanumeric = true;
-
-    //         for c in alt.raw.chars() {
-    //             if c.is_alphanumeric() == is_alphanumeric {
-    //                 current.push(c);
-    //             } else {
-    //                 if !current.is_empty() {
-    //                     words_and_delims.push((current.clone(), is_alphanumeric));
-    //                 }
-    //                 current.clear();
-    //                 current.push(c);
-    //                 is_alphanumeric = !is_alphanumeric;
-    //             }
-    //         }
-    //         if !current.is_empty() {
-    //             words_and_delims.push((current, is_alphanumeric));
-    //         }
-
-    //         // Helper to titlecase a single string chunk safely
-    //         let to_titlecase = |s: &str| {
-    //             let mut chars = s.chars();
-    //             match chars.next() {
-    //                 None => String::new(),
-    //                 Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-    //             }
-    //         };
-
-    //         // --- 1. Sentence-capitalized version ---
-    //         let mut is_first_word = true;
-    //         let sentence_version: String = words_and_delims.iter().map(|(chunk, is_word)| {
-    //             if *is_word && is_first_word {
-    //                 is_first_word = false;
-    //                 to_titlecase(chunk)
-    //             } else {
-    //                 chunk.clone()
-    //             }
-    //         }).collect();
-    //         push_expanded(sentence_version, alt.fam.clone(), cfg.debug, "SC");
-
-    //         // --- 2. Each word in Titlecase version ---
-    //         let titlecase_version: String = words_and_delims.iter().map(|(chunk, is_word)| {
-    //             if *is_word { to_titlecase(chunk) } else { chunk.clone() }
-    //         }).collect();
-    //         push_expanded(titlecase_version, alt.fam.clone(), cfg.debug, "TC");
-
-    //         // --- 3. Each word in ALL CAPS version ---
-    //         let all_caps_version: String = words_and_delims.iter().map(|(chunk, is_word)| {
-    //             if *is_word { chunk.to_uppercase() } else { chunk.clone() }
-    //         }).collect();
-    //         push_expanded(all_caps_version, alt.fam.clone(), cfg.debug, "AC");
-    //     }
-        
-    //     cfg.alternatives.extend(xpanded);
-    // }
 
 
     // --- POST-PARSING NORMALIZATION ---
