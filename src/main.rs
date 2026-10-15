@@ -40,6 +40,7 @@
 // ============================================================================
 mod colour;
 mod compare;
+mod config;
 mod google_ngrams;
 mod pos;
 mod types;
@@ -48,13 +49,10 @@ mod types;
 // IMPORTS
 // ============================================================================
 // 1. Standard Library Imports
-// use std::collections::HashSet;
-use std::env;
 use std::vec::Vec;
 
 // 2. External Crate Imports
 use harper_core::spell::{Dictionary, FstDictionary};
-use itertools::Itertools;
 
 // 3. Local Module Imports (Now valid because the modules are declared above)
 use compare::{compare_three, compare_two};
@@ -94,132 +92,6 @@ pub struct Alternative {
     pub raw: String,
     pub jfmt: String,
     pub fam: Option<String>,
-}
-
-/// Configuration parsed from command-line arguments
-/// - `raw`: Reserved for future raw diagnostic output
-/// - `alternatives`: List of word alternatives to analyze
-/// - `has_families`: Whether family groupings are enabled
-pub struct Cfg {
-    pub debug: bool,
-    pub raw: bool,
-    pub alternatives: Vec<Alternative>,
-    pub has_families: bool,
-    pub since_year: Option<[char; 4]>,
-}
-
-// ============================================================================
-// COMMAND-LINE INTERFACE
-// ============================================================================
-
-/// Parses command-line arguments into a configuration struct
-///
-/// Supported arguments:
-/// - `--raw`: Enable raw diagnostic output
-/// - `--family=<name>`, `--fam=<name>`, `-f=<name>`: Set family for subsequent alternatives
-pub fn cli() -> Result<Cfg, Box<dyn std::error::Error>> {
-    let args: Vec<String> = env::args().skip(1).collect();
-    let mut cfg = Cfg {
-        debug: false,
-        raw: false,
-        alternatives: Vec::new(),
-        has_families: false,
-        since_year: None,
-    };
-
-    let mut family = None;
-
-    for arg in args {
-        if arg == "--raw" {
-            cfg.raw = true;
-        } else if ["--debug", "-d"].contains(&arg.as_str()) {
-            cfg.debug = true;
-        } else if ["--family=", "--fam=", "-f="]
-            .iter()
-            .any(|p| arg.starts_with(p))
-        {
-            family = match arg.split('=').nth(1) {
-                None | Some("") => None,
-                Some(s) => Some(s.to_string()),
-            };
-            if cfg.debug {
-                if let Some(f) = &family {
-                    println!("👉Family: {}", f);
-                } else {
-                    unreachable!()
-                }
-            }
-            cfg.has_families = true;
-        } else if let Some(prefix) = ["--since=", "--since-year="]
-            .into_iter()
-            .find(|p| arg.starts_with(p))
-        {
-            cfg.since_year = match &arg[prefix.len()..] {
-                "" => None,
-                y if y.len() == 4 && y.chars().all(|c| c.is_ascii_digit()) => {
-                    let y = y.as_bytes();
-                    Some([y[0] as char, y[1] as char, y[2] as char, y[3] as char])
-                }
-                _ => return Err("Year must be exactly 4 digits".into()),
-            };
-        } else if arg.starts_with('-') {
-            return Err(format!("Unknown option: {}", arg).into());
-        } else if arg.contains('-') {
-            // Hyphenated phrases: replace hyphens with " - " for Ngram JSON API compatibility
-            // NOTE: See also the special handling for apostrophes in google_ngrams.rs/build_url()
-            cfg.alternatives.push(Alternative {
-                raw: arg.clone(),
-                jfmt: arg.split('-').join(" - "),
-                fam: family.clone(),
-            });
-        } else if arg.contains('\'') {
-            // Special handling when any word starts or ends with an apostrophe, such as 'tis or 'nother
-            // NOTE: See also the special handling for apostrophes in google_ngrams.rs/build_url()
-            let jfmt = arg
-                .split(' ')
-                .map(|part| {
-                    if let Some(w) = part.strip_prefix('\'') {
-                        format!("' {w}")
-                    } else if let Some(w) = part.strip_suffix('\'') {
-                        format!("{w} '")
-                    } else {
-                        part.to_string()
-                    }
-                })
-                .collect::<Vec<String>>()
-                .join(" ");
-            cfg.alternatives.push(Alternative {
-                raw: jfmt.clone(),
-                jfmt,
-                fam: family.clone(),
-            });
-        } else {
-            // Simple words: use as-is
-            if cfg.debug {
-                if let Some(family) = &family {
-                    println!("👉Word: {}::{}", family, arg);
-                } else {
-                    println!("👉Word: {}", arg);
-                }
-            }
-            cfg.alternatives.push(Alternative {
-                raw: arg.clone(),
-                jfmt: arg.clone(),
-                fam: family.clone(),
-            });
-        }
-    }
-
-    // --- POST-PARSING NORMALIZATION ---
-    if !cfg.has_families {
-        // If no families were specified anywhere on the CLI,
-        // the family can just copy the raw alternative.
-        for alt in cfg.alternatives.iter_mut() {
-            alt.fam = Some(alt.raw.clone());
-        }
-    }
-
-    Ok(cfg)
 }
 
 // ============================================================================
@@ -271,7 +143,7 @@ fn get_poses(dict: &FstDictionary, word: &str) -> pos::PosLookupResult {
 /// The current implementation focuses on comparing exactly 2 families of alternatives,
 /// with color-coded output showing shared vs unique contexts.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let cfg = cli()?;
+    let cfg = config::cli()?;
 
     let table = google_ngrams::fetch_google_ngrams(&cfg)?;
 
