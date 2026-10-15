@@ -43,6 +43,7 @@ mod compare;
 mod config;
 mod google_ngrams;
 mod pos;
+mod transform;
 mod types;
 
 // ============================================================================
@@ -133,17 +134,18 @@ fn get_poses(dict: &FstDictionary, word: &str) -> pos::PosLookupResult {
 /// Main function - orchestrates the entire analysis pipeline
 ///
 /// 1. Parse CLI arguments
-/// 2. Build API URL and fetch JSON data
-/// 3. Parse ngram data into structured rows
-/// 4. Load dictionary for POS lookup
-/// 5. Build a hierarchical data structure (FamilyTree -> AlternativeMap -> SideMap -> ContextSet)
-/// 6. Compare two families of alternatives using set operations (union, intersection, difference)
-/// 7. Display results showing which context words and POS tags are unique to each family
-///
-/// The current implementation focuses on comparing exactly 2 families of alternatives,
-/// with color-coded output showing shared vs unique contexts.
+/// 2. Programmatically transform / expand alternatives (affixing, lemma expansion, etc.)
+/// 3. Build API URL and fetch JSON data
+/// 4. Parse ngram data into structured rows
+/// 5. Load dictionary for POS lookup
+/// 6. Build a hierarchical data structure (FamilyTree -> AlternativeMap -> SideMap -> ContextSet)
+/// 7. Compare families of alternatives using set operations (union, intersection, difference)
+/// 8. Display results showing which context words and POS tags are unique to each family
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let cfg = config::cli()?;
+    let mut cfg = config::cli()?;
+
+    // Level of indirection: programmatic modification / expansion of alternatives
+    transform::transform_alternatives(&mut cfg)?;
 
     let table = google_ngrams::fetch_google_ngrams(&cfg)?;
 
