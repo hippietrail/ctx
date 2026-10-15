@@ -193,8 +193,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     match tree.len() {
-        2 => compare_two(&dict, tree),
-        3 => compare_three(&dict, tree),
+        2 => compare_two(&dict, tree, &cfg),
+        3 => compare_three(&dict, tree, &cfg),
         _ => {
             println!(
                 "Tree size must be exactly 2 or 3 to run analysis, but got {}",

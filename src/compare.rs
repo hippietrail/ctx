@@ -7,10 +7,11 @@ use itertools::Itertools;
 
 // 3. Local Crate Imports
 use crate::colour::{BLUE, CYAN, Colour, GREEN, MAGENTA, ORANGE, RED, YELLOW};
+use crate::config::Cfg;
 use crate::pos::{Pos, pos_info}; // Fixed path: assuming Pos is inside pos
 use crate::types::FamilyTree; // Fixed path: assuming FamilyTree is inside types
 
-pub fn compare_two(dict: &FstDictionary, tree: FamilyTree) {
+pub fn compare_two(dict: &FstDictionary, tree: FamilyTree, cfg: &Cfg) {
     // 1. Extract family names and their corresponding AlternativeMaps in sorted order
     let (family_keys, fam_a, fam_b) = tree.into_two_families_sorted();
     let fam_name_a = family_keys[0].as_deref().unwrap_or("None");
@@ -95,9 +96,65 @@ pub fn compare_two(dict: &FstDictionary, tree: FamilyTree) {
             };
             b_not_a.push(formatted);
         }
-        // println!(" 🗂️ {}", [a_not_b, both, b_not_a].join(", "));
         println!(" {label} {}: {}", fam_name_a.c(ORANGE), a_not_b.join(", "));
         println!(" {label} {}: {}", fam_name_b.c(RED), b_not_a.join(", "));
+
+        // Common words (Format Option A: bracketed comparison in BLUE)
+        if cfg.common_words && !word_intersection.is_empty() {
+            let word_counts_a = fam_a.word_counts_for_side(side_variant, dict);
+            let word_counts_b = fam_b.word_counts_for_side(side_variant, dict);
+
+            let words_a = word_intersection
+                .iter()
+                .map(|low_word| {
+                    let display_word = get_raw_input_word(low_word);
+                    let canon = get_correct_capitalization_of_string(dict, &display_word);
+                    let count = word_counts_a
+                        .get(&canon)
+                        .or_else(|| word_counts_a.get(&display_word))
+                        .or_else(|| word_counts_a.get(low_word))
+                        .copied()
+                        .unwrap_or(1);
+                    (canon, count)
+                })
+                .sorted_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)))
+                .map(|(word, count)| format_pos_w_count(&word, &count))
+                .collect::<Vec<_>>()
+                .join(" ");
+
+            let words_b = word_intersection
+                .iter()
+                .map(|low_word| {
+                    let display_word = get_raw_input_word(low_word);
+                    let canon = get_correct_capitalization_of_string(dict, &display_word);
+                    let count = word_counts_b
+                        .get(&canon)
+                        .or_else(|| word_counts_b.get(&display_word))
+                        .or_else(|| word_counts_b.get(low_word))
+                        .copied()
+                        .unwrap_or(1);
+                    (canon, count)
+                })
+                .sorted_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)))
+                .map(|(word, count)| format_pos_w_count(&word, &count))
+                .collect::<Vec<_>>()
+                .join(" ");
+
+            let output = match side_variant {
+                crate::Side::Before => format!(
+                    " {label} common : [{} : {}] vs [{} : {}]",
+                    words_a, fam_name_a.c(ORANGE),
+                    words_b, fam_name_b.c(RED)
+                ),
+                crate::Side::After => format!(
+                    " {label} common : [{} : {}] vs [{} : {}]",
+                    fam_name_a.c(ORANGE), words_a,
+                    fam_name_b.c(RED), words_b
+                ),
+            };
+
+            println!("{}", output.c(BLUE));
+        }
 
         // --- Parts of Speech (Pos) Set Processing ---
         // Build the counting structures: POS → (canonical word → count)
@@ -148,42 +205,44 @@ pub fn compare_two(dict: &FstDictionary, tree: FamilyTree) {
         }
 
         // 4. Print shared POS (Intersection) on a single combined line
-        for pos in pos_intersection.iter().sorted() {
-            let info = pos_info(pos);
-            let pos_label = format!("{}{}", info.emoji, info.letter);
+        if cfg.common_pos {
+            for pos in pos_intersection.iter().sorted() {
+                let info = pos_info(pos);
+                let pos_label = format!("{}{}", info.emoji, info.letter);
 
-            // Format helper for the word subsets
-            let get_words_str = |words_map: Option<&HashMap<String, usize>>| -> Option<String> {
-                let map = words_map?;
-                if map.is_empty() { return None; }
-                
-                Some(map
-                    .iter()
-                    .sorted_by(|a, b| b.1.cmp(a.1))
-                    .take(3)
-                    .map(|(word, count)| format_pos_w_count(word, count))
-                    .collect::<Vec<_>>()
-                    .join(" "))
-            };
+                // Format helper for the word subsets
+                let get_words_str = |words_map: Option<&HashMap<String, usize>>| -> Option<String> {
+                    let map = words_map?;
+                    if map.is_empty() { return None; }
+                    
+                    Some(map
+                        .iter()
+                        .sorted_by(|a, b| b.1.cmp(a.1))
+                        .take(3)
+                        .map(|(word, count)| format_pos_w_count(word, count))
+                        .collect::<Vec<_>>()
+                        .join(" "))
+                };
 
-            let words_a = get_words_str(pos_counts_a.get(pos)).unwrap_or_default();
-            let words_b = get_words_str(pos_counts_b.get(pos)).unwrap_or_default();
+                let words_a = get_words_str(pos_counts_a.get(pos)).unwrap_or_default();
+                let words_b = get_words_str(pos_counts_b.get(pos)).unwrap_or_default();
 
-            // Construct unified single-line outputs depending on side layout
-            let output = match side_variant {
-                crate::Side::Before => format!(
-                    " {pos_label} : [{} : {}] vs [{} : {}]",
-                    words_a, fam_name_a.c(ORANGE),
-                    words_b, fam_name_b.c(RED)
-                ),
-                crate::Side::After => format!(
-                    " {pos_label} : [{} : {}] vs [{} : {}]",
-                    fam_name_a.c(ORANGE), words_a,
-                    fam_name_b.c(RED), words_b
-                ),
-            };
+                // Construct unified single-line outputs depending on side layout
+                let output = match side_variant {
+                    crate::Side::Before => format!(
+                        " {pos_label} : [{} : {}] vs [{} : {}]",
+                        words_a, fam_name_a.c(ORANGE),
+                        words_b, fam_name_b.c(RED)
+                    ),
+                    crate::Side::After => format!(
+                        " {pos_label} : [{} : {}] vs [{} : {}]",
+                        fam_name_a.c(ORANGE), words_a,
+                        fam_name_b.c(RED), words_b
+                    ),
+                };
 
-            println!("{}", output.c(BLUE));
+                println!("{}", output.c(BLUE));
+            }
         }
 
         // 5. Print unique POS for Family B
@@ -196,7 +255,7 @@ pub fn compare_two(dict: &FstDictionary, tree: FamilyTree) {
     analyze_side(crate::Side::After, "After");
 }
 
-pub fn compare_three(dict: &FstDictionary, tree: FamilyTree) {
+pub fn compare_three(dict: &FstDictionary, tree: FamilyTree, cfg: &Cfg) {
     // 1. Extract family names and their corresponding AlternativeMaps in sorted order
     let (family_keys, fam_a, fam_b, fam_c) = tree.into_three_families_sorted();
     let fam_name_a = family_keys[0].as_deref().unwrap_or("None");
@@ -304,17 +363,19 @@ pub fn compare_three(dict: &FstDictionary, tree: FamilyTree) {
         }
 
         // Group 4: Shared by all three
-        for low_word in intersection_all.iter().sorted() {
-            let display_word = get_raw_input_word(low_word);
-            let is_oov = dict.get_word_metadata_str(&display_word).is_none();
-            let canonical_word = get_correct_capitalization_of_string(dict, &display_word);
+        if cfg.common_words {
+            for low_word in intersection_all.iter().sorted() {
+                let display_word = get_raw_input_word(low_word);
+                let is_oov = dict.get_word_metadata_str(&display_word).is_none();
+                let canonical_word = get_correct_capitalization_of_string(dict, &display_word);
 
-            let formatted = if is_oov {
-                format!("{}", canonical_word.d().b())
-            } else {
-                format!("{}", canonical_word.b())
-            };
-            combined_pos.push(formatted);
+                let formatted = if is_oov {
+                    format!("{}", canonical_word.d().b())
+                } else {
+                    format!("{}", canonical_word.b())
+                };
+                combined_pos.push(formatted);
+            }
         }
         println!(" 🗂️ {}", combined_pos.join(", "));
 
@@ -341,7 +402,9 @@ pub fn compare_three(dict: &FstDictionary, tree: FamilyTree) {
             let in_c = pos_set_c.contains(&pos);
 
             if in_a && in_b && in_c {
-                combined.push(format!("\x1b[1m{:?}\x1b[0m", pos)); // Bold for pos in all three
+                if cfg.common_pos {
+                    combined.push(format!("\x1b[1m{:?}\x1b[0m", pos)); // Bold for pos in all three
+                }
             } else if in_a && in_b {
                 combined.push(format!("\x1b[33m{:?}\x1b[0m", pos)); // Yellow for pos in A and B only
             } else if in_a && in_c {
