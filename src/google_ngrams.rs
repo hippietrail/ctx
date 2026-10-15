@@ -10,7 +10,7 @@
 use serde::Deserialize;
 
 // Local modules
-use crate::Cfg;
+use crate::config::Cfg;
 
 /// Represents a single item from the Google Ngrams JSON API response
 /// - `ngram`: The full ngram string (e.g., "* stake")
