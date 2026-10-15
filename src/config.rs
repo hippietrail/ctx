@@ -18,6 +18,8 @@ pub struct Cfg {
     pub has_families: bool,
     pub since_year: Option<[char; 4]>,
     pub expand_families: bool,
+    pub common_words: bool,
+    pub common_pos: bool,
 }
 
 impl Cfg {
@@ -79,6 +81,10 @@ impl Cfg {
 /// - `--raw`: Enable raw diagnostic output
 /// - `-f <first_alt>`, `--fam <first_alt>`, `--family <first_alt>`: Start family and include first alternative
 /// - `-f=<name>`, `--fam=<name>`, `--family=<name>`: Set symbolic family label for subsequent alternatives
+/// - `--common-words`: Show shared context words across families
+/// - `--no-common-words`: Hide shared context words (default)
+/// - `--common-pos`: Show shared POS categories across families (default)
+/// - `--no-common-pos`: Hide shared POS categories across families
 pub fn cli() -> Result<Cfg, Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().skip(1).collect();
     let mut cfg = Cfg {
@@ -88,6 +94,8 @@ pub fn cli() -> Result<Cfg, Box<dyn std::error::Error>> {
         has_families: false,
         since_year: None,
         expand_families: false,
+        common_words: false,
+        common_pos: true,
     };
 
     let mut family = None;
@@ -146,6 +154,14 @@ pub fn cli() -> Result<Cfg, Box<dyn std::error::Error>> {
             };
         } else if arg == "--expand-families" {
             cfg.expand_families = true;
+        } else if arg == "--common-words" {
+            cfg.common_words = true;
+        } else if arg == "--no-common-words" {
+            cfg.common_words = false;
+        } else if arg == "--common-pos" {
+            cfg.common_pos = true;
+        } else if arg == "--no-common-pos" {
+            cfg.common_pos = false;
         } else if arg.starts_with('-') {
             return Err(format!("Unknown option: {}", arg).into());
         } else {

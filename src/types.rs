@@ -101,6 +101,28 @@ impl AlternativeMap {
                 acc
             })
     }
+
+    /// Builds a counting structure: canonical word → occurrence count across alternatives
+    /// This counts how many alternatives in this family each word appears with.
+    pub fn word_counts_for_side(
+        &self,
+        side: crate::Side,
+        dict: &FstDictionary,
+    ) -> HashMap<String, usize> {
+        let mut counts = HashMap::new();
+        for side_map in self.values() {
+            if let Some(ctx_set) = side_map.get(&side) {
+                let mut seen_in_alt = HashSet::new();
+                for word in ctx_set.keys() {
+                    let (_, canonical) = get_canon_case(dict, word);
+                    if seen_in_alt.insert(canonical.clone()) {
+                        *counts.entry(canonical).or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+        counts
+    }
 }
 
 #[derive(Debug, Default)]

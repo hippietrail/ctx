@@ -90,6 +90,8 @@ cargo run --release -- term1 term2 term3
 - `--family <term>`, `--fam <term>`, `-f <term>` - Start a family named `<term>` and include `<term>` as its first alternative
 - `--family=<name>`, `--fam=<name>`, `-f=<name>` - Set a symbolic family label for subsequent alternatives
 - `--expand-families` - Automatically generate case variants (Sentence case, Title Case, ALL CAPS) for each alternative
+- `--common-words`, `--no-common-words` - Show or hide common context words shared across families (default: hide)
+- `--common-pos`, `--no-common-pos` - Show or hide common POS categories shared across families (default: show)
 - `--since=<year>`, `--since-year=<year>` - Filter data from a specific year onwards (must be exactly 4 digits)
 
 Note: The current implementation requires exactly 2 or 3 families for comparison. If no families are specified, each alternative becomes its own family.
