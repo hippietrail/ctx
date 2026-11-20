@@ -134,11 +134,12 @@ pub fn cli() -> Result<Cfg, Box<dyn std::error::Error>> {
                 None | Some("") => None,
                 Some(s) => Some(s.to_string()),
             };
-            if cfg.debug {
-                if let Some(f) = &family {
-                    println!("👉Family: {}", f);
-                }
+            if cfg.debug
+                && let Some(f) = &family
+            {
+                println!("👉Family: {}", f);
             }
+
             cfg.has_families = true;
         } else if let Some(prefix) = ["--since=", "--since-year="]
             .into_iter()
@@ -172,7 +173,6 @@ pub fn cli() -> Result<Cfg, Box<dyn std::error::Error>> {
     if expect_family_head {
         return Err("Expected alternative following -f / --family flag at end of arguments".into());
     }
-
 
     // --- POST-PARSING NORMALIZATION ---
     if !cfg.has_families {

@@ -78,6 +78,7 @@ struct Row {
     pub alt: String,         // An individual word or phrase being compared against others
     pub side: Side, // Does this row contain the context words before the 'alternative' or after?
     pub ctx: String, // A single context word that frequently appears right before or right after this 'alternative'.
+    pub freq: f64,
 }
 
 // ============================================================================
@@ -176,15 +177,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
 
         // 2. Build the tree with the normalized key
-        tree.entry(family_key)
+        let entry = tree
+            .entry(family_key)
             .or_default()
             .entry(row.alt.clone())
             .or_default()
             .entry(row.side)
             .or_default()
             .entry(row.ctx.clone())
-            .or_default()
-            .extend(poses);
+            .or_default();
+        entry.poses.extend(poses);
+        entry.freq += row.freq;
     }
 
     println!(
