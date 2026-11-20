@@ -61,10 +61,7 @@ fn expand_family_casings(cfg: &mut Cfg) {
         let (raw, fam): (&String, &Option<String>) = (&alt.raw, &alt.fam);
 
         // Split into owned strings so we can manipulate and reuse them
-        let parts: Vec<String> = raw
-            .split(&[' ', '-'][..])
-            .map(|s| s.to_string())
-            .collect();
+        let parts: Vec<String> = raw.split(&[' ', '-'][..]).map(|s| s.to_string()).collect();
 
         if parts.is_empty() || parts[0].is_empty() {
             continue;

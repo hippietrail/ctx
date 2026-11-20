@@ -4,126 +4,126 @@
 
 ## Purpose
 
-This tool analyzes commonly confused English words or phrases (e.g., "affect/effect", "their/there/they're") to identify discriminative patterns that help developers write grammar checker rules.
+This tool analyzes commonly confused English words or phrases (e.g., `"affect"` / `"effect"`, `"point out some"` / `"point some"`) to identify discriminative patterns that help developers write grammar checker rules.
 
-The tool provides information to developers, not automated rule generation. For example, it might reveal: "If 'rightly' comes after a word with POS X or before specific word Y, it's probably a mistake for 'rightfully'."
+The tool provides empirical corpus data to developers rather than automated rule generation. For example, it might reveal: *"If 'point' is followed by 'some' and a noun like 'problems' or 'errors', it's almost certainly missing 'out'."*
 
 The analysis works by:
-1. **Data Fetching**: Fetches context words from Google Ngram Viewer for each alternative
-2. **Hierarchical Organization**: Organizes data into a FamilyTree structure (Family → Alternative → Side → Context → POS tags)
-3. **Set Operations**: Compares two families using set operations (union, intersection, difference) to identify:
-   - Shared contexts (bold) - words that appear with both families
-   - Unique contexts (color-coded) - words that appear with only one family
-   - POS patterns that distinguish between families
+1. **Data Fetching**: Queries Google Ngrams' JSON API for wildcard expansions before and after each alternative.
+2. **Hierarchical Organization**: Organizes data into a `FamilyTree` structure (`Family → Alternative → Side → Context → (POS tags, frequency)`).
+3. **Set Operations & Frequency Weighting**: Compares two (or three) families using set operations (`union`, `intersection`, `difference`) and aggregates `timeseries` relative frequencies to highlight:
+   - **Unique contexts** (color-coded by family) — words and POS tags that appear with only one family.
+   - **Shared contexts** (blue bracketed comparisons) — words and POS tags that appear with both families, ranked and weighted by relative frequency.
 
-Developers can use this information to write Harper linter rules that flag potential misuse of confusable terms based on their linguistic context.
+Developers can use this information to write [Harper](https://github.com/hippietrail/harper) linter rules that flag potential misuse of confusable terms based on their surrounding context.
 
 ## Features
 
-- Fetches context words from Google Ngram Viewer (before/after each alternative)
-- Uses part-of-speech tagging to categorize context words via Harper's dictionary
-- Compares two families of alternatives using set operations
-- Color-coded output showing shared vs unique contexts and POS patterns
-- Supports family grouping for comparing related alternatives (e.g., case variants, compound forms)
-- Optional year filtering to analyze language usage from specific time periods
+- Fetches pre- and post-context wildcard expansions from Google Ngrams' JSON endpoint in a single combined request
+- Computes mean relative frequency weights from Google Ngrams' `timeseries` data across the queried year range
+- Categorizes context words by part of speech using `harper-core`'s lexical dictionary
+- Compares 2 or 3 families of alternatives using set operations
+- Color-coded terminal output with relative frequency superscripts (e.g., `to¹⁰⁰`, `and³⁰˙¹²`)
+- Supports family grouping (`-f`) and automatic case-variant expansion (`--expand-families`)
+- Optional start-year filtering (`--since`) to focus on modern or period-specific usage
 
 ## How It Works
 
-1. **API Query**: Constructs a Google NGrams JSON API query using the `*` wildcard before and after each confusable term to capture context words
-2. **Data Fetching**: Uses `reqwest` to fetch JSON data directly from Google NGrams
-3. **JSON Parsing**: Parses the NGrams response, extracting EXPANSION-type entries to identify context words
-4. **Context Extraction**: For each confusable term, extracts pre-contexts (words before) and post-contexts (words after) from the ngram data
-5. **Hierarchical Organization**: Builds a FamilyTree structure: Family → Alternative → Side (Before/After) → Context → POS tags
-6. **Set Operations**: Compares two families using union, intersection, and difference operations to identify shared vs unique contexts
-7. **POS Analysis**: Categorizes context words by part-of-speech using Harper's dictionary
-8. **Output**: Color-coded results showing which context words and POS tags are shared (bold) or unique (colored) to each family
+1. **API Query**: Builds a single Google Ngrams JSON API URL combining `* {alt}` and `{alt} *` wildcard patterns for every alternative.
+2. **Data Fetching**: Uses `reqwest` (blocking) to fetch the JSON payload directly from Google Ngrams.
+3. **JSON Parsing**: Filters `EXPANSION` entries, isolates the preceding or following context word, and averages the `timeseries` array into a relative frequency score.
+4. **POS Lookup**: Looks up each context word in `harper-core`'s `FstDictionary` to attach matching POS tags (and flags out-of-vocabulary tokens).
+5. **Hierarchical Organization**: Inserts rows into `FamilyTree`: `Family → Alternative → Side (Before/After) → Context → ContextEntry { poses, freq }`.
+6. **Comparison & Output**: Computes set differences and intersections across families, normalizes relative frequencies on a `0–100` scale within each comparison group, and prints color-coded results.
 
 ## Language Choice
 
-**Rust** chosen because:
-- Harper integration (Harper is written in Rust)
-- Uses Harper's lexical POS tagging (the same POS information available to linters)
+**Rust** was chosen for direct integration with `harper-core`, ensuring that `ctx` uses the exact same dictionary and lexical POS metadata available to Harper's linters.
 
 ## Getting Data from Google Ngrams
 
-The tool now fetches data directly from Google NGrams' JSON endpoint. The query is automatically constructed using the `*` wildcard before and after each confusable term to capture context words.
+The tool queries Google Ngrams' JSON endpoint (`https://google.com`) with a comma-separated `content` parameter containing both `* {alt}` (pre-context) and `{alt} *` (post-context) for each alternative. Because `*` matches a single token in Google Ngrams, `ctx` analyzes one context word immediately before and one immediately after each target phrase.
 
-Example query constructed internally: `* they ' re,they ' re *,* their,their *,* there,there *`
-
-Note: Google NGrams has limitations on the number of alternatives per query and only allows one `*` per query, which is why the tool makes separate queries for pre-context and post-context. `*` can only match one word, hence the tool only considers one word of context per side.
+Example `content` query constructed internally:
+`* they ' re,they ' re *,* their,their *,* there,there *`
 
 ### Special Input Handling
 
-The tool automatically handles special characters in input:
+The tool automatically formats special characters for Google Ngrams API compatibility:
 
-- **Hyphens**: Hyphenated phrases are converted to use spaces (e.g., "wide-ranging" becomes "wide - ranging") for API compatibility
-- **Apostrophes**: Words starting or ending with apostrophes (e.g., "'tis", "'nother") are formatted with space-separated apostrophes (e.g., "' tis", "nother '") for proper API query construction
-- **Apostrophes in general**: Words containing apostrophes (e.g., "don't") are wrapped in brackets (e.g., "[* don't]") for the API query
+- **Hyphens**: Hyphenated phrases are spaced around the hyphen (e.g., `"wide-ranging"` becomes `"wide - ranging"`).
+- **Leading/trailing apostrophes**: Clitics like `"'tis"` or `"'nother"` are formatted with space-separated apostrophes (e.g., `"' tis"`, `"nother '"`).
+- **Internal apostrophes**: Words containing apostrophes (e.g., `"don't"`) are wrapped in square brackets (e.g., `"[* don't]"`).
 
 ## Usage
 
 ```bash
-# Basic usage - specify confusable terms as arguments
-cargo run --release there their "they ' re"
+# Basic 2-way comparison
+cargo run --release -- affect effect
 
-# Multi-word phrases (use quotes)
-cargo run --release "shopping center" "shopping centre" "shopping mall" mall
+# 3-way comparison
+cargo run --release -- there their "they ' re"
 
 # Filter data from a specific year onwards
-cargo run --release --since=1968 foo bar
+cargo run --release -- --since=1968 "point out some" "point some"
 
-# Family grouping for comparing related alternatives (bare -f sets family and includes first term)
-cargo run --release -f foo foos -f bar bars
+# Group related forms into families (bare -f creates a family and includes that term)
+cargo run --release -- -f foo foos -f bar bars
 
-# Symbolic family names (without querying the family name itself)
-cargo run --release -f=US color theater -f=UK colour theatre
+# Group multi-word phrases into 2 families
+cargo run --release -- -f "shopping center" "shopping centre" -f "shopping mall" mall
 
-# Build and run
-cargo build --release
-cargo run --release -- term1 term2 term3
+# Symbolic family names (groups alternatives without querying the family label itself)
+cargo run --release -- -f=US color theater -f=UK colour theatre
+
+# Expand case variants automatically and show shared context words
+cargo run --release -- --since=1962 --expand-families --common-words --no-common-pos -f "point out some" -f "point some"
 ```
 
 ## Command Line Arguments
 
-- `[terms...]` - The confusable terms or phrases to analyze (space-separated, use quotes for multi-word phrases)
-- `--debug`, `-d` - Enable debug mode (shows query content and family assignments)
-- `--family <term>`, `--fam <term>`, `-f <term>` - Start a family named `<term>` and include `<term>` as its first alternative
-- `--family=<name>`, `--fam=<name>`, `-f=<name>` - Set a symbolic family label for subsequent alternatives
-- `--expand-families` - Automatically generate case variants (Sentence case, Title Case, ALL CAPS) for each alternative
-- `--common-words`, `--no-common-words` - Show or hide common context words shared across families (default: hide)
-- `--common-pos`, `--no-common-pos` - Show or hide common POS categories shared across families (default: show)
-- `--since=<year>`, `--since-year=<year>` - Filter data from a specific year onwards (must be exactly 4 digits)
+- `[terms...]` — Confusable terms or phrases to analyze (use quotes for multi-word phrases).
+- `--family <term>`, `--fam <term>`, `-f <term>` — Start a family named `<term>` and include `<term>` as its first alternative.
+- `--family=<name>`, `--fam=<name>`, `-f=<name>` — Start a family with symbolic label `<name>` without adding `<name>` as a search term.
+- `--expand-families` — Automatically generate case variants (lowercase, Title Case, ALL CAPS) for each alternative.
+- `--common-words`, `--no-common-words` — Show or hide shared context words across families (default: hide).
+- `--common-pos`, `--no-common-pos` — Show or hide shared POS categories across families (default: show).
+- `--since=<year>`, `--since-year=<year>` — Filter data from a specific 4-digit start year onwards.
+- `--debug`, `-d` — Enable debug output.
 
-Note: The current implementation requires exactly 2 or 3 families for comparison. If no families are specified, each alternative becomes its own family.
+> **Note:** Analysis requires **2 or 3 families**. If no `-f` flags are provided, each term is placed in its own individual family.
 
 ## Output
 
-The tool outputs color-coded results comparing two families of alternatives:
+In 2-way comparison mode, `ctx` prints `Before` and `After` sections for both `WORDS` and `POS`:
 
+```text
+“family A” vs. “family B”
+=== Before WORDS ===
+ Before family A: [words unique to A in orange]
+ Before family B: [words unique to B in red]
+ Before common : [words with freq¹⁰⁰ : family A] vs [words with freq¹²˙⁵ : family B]
+=== Before POS ===
+ 🌈J : [top words unique to A in orange] : family A
+ 📥P : [words : family A] vs [words : family B]   (shared POS in blue, when --common-pos is enabled)
+ 👉D : [top words unique to B in red] : family B
+=== After WORDS ===
+ After family A: [words unique to A in orange]
+ After family B: [words unique to B in red]
+ After common : [family A : words with freq¹⁰⁰] vs [family B : words with freq⁷˙³⁵]
+=== After POS ===
+ ...
 ```
-=== LEFT WORDS ===
-  [shared words in bold], [family A unique words in yellow], [family B unique words in red]
-=== LEFT POS ===
-  [shared POS in bold], [family A unique POS in yellow], [family B unique POS in red]
-=== RIGHT WORDS ===
-  [shared words in bold], [family A unique words in yellow], [family B unique words in red]
-=== RIGHT POS ===
-  [shared POS in bold], [family A unique POS in yellow], [family B unique POS in red]
-```
 
-- **Bold text**: Items shared by both families
-- **Yellow text**: Items unique to the first family
-- **Red text**: Items unique to the second family
-- **POS tags**: Full enum names (e.g., Noun, Verb, Adjective) from Harper's dictionary
-- **Family grouping**: Enables comparison of groups of related alternatives
-
-This information can be used to create grammar checker rules that help determine when a confusable word is used correctly or mistakenly.
+- **Colors**: Family A is **orange**, Family B is **red**, and shared comparisons are **blue**.
+- **Out-of-vocabulary (OOV) tokens**: Words not found in Harper's dictionary are dimmed and wrapped in guillemets (e.g., `«ap-»`).
+- **POS tags**: Displayed as emoji + single-letter codes (e.g., `📦N` Noun, `🏃V` Verb, `🌈J` Adjective, `🤷R` Adverb, `📥P` Preposition, `👉D` Determiner, `🔗C` Conjunction, `📛O` Pronoun).
+- **Frequency superscripts**: Relative frequencies derived from Google Ngrams `timeseries` data, normalized on a `0–100` scale relative to the strongest collocate in each comparison group (with trailing zeros trimmed).
 
 ----
 
-I initially coded this by hand, but with help from the AI assistant built into Devin, the code editor formerly known as Windsurf, and from Google Search's AI.
+## History
 
-Once I had it working as I wanted, I got Devin to refactor it to be more idiomatic Rust and then add some trivial features.  
-Since then I modified it both with hand-coding and using a couple of free coding AIs, mostly for suggestions, but sometimes to directly modify the code.  
-Like many vibe-coded tools, the code got harder to understand and modify, but the basic steps became clearer to me.  
-Then I discovered that Google Ngrams JSON endpoint and rewrote it from scratch by hand. Once more some AI-generated suggestions have since been integrated.  
+I initially coded this by hand, with help from the AI assistant built into Devin (formerly Windsurf) and from Google Search's AI.
+
+Once I had it working as I wanted, I got Devin to refactor it to be more idiomatic Rust and add a few small features. Since then I've modified it through a mix of hand-coding and AI-assisted suggestions. Like many vibe-coded tools, the code eventually grew harder to understand and modify, though the core pipeline became clearer to me. When I discovered Google Ngrams' JSON endpoint, I rewrote it from scratch by hand, integrating selective AI-assisted refinements since then.

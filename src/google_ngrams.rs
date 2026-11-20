@@ -16,7 +16,7 @@ use crate::config::Cfg;
 /// - `ngram`: The full ngram string (e.g., "* stake")
 /// - `parent`: The parent ngram this expands from
 /// - `kind`: The type of ngram (Collection, Expansion, or individual Ngram)
-/// - `_timeseries`: The frequency data over time (currently unused)
+/// - `timeseries`: The frequency data over time
 #[derive(Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub struct NgramItem {
@@ -24,8 +24,7 @@ pub struct NgramItem {
     parent: String,
     #[serde(rename = "type")]
     kind: NgramType,
-    #[serde(rename = "timeseries")]
-    _timeseries: serde_json::Value,
+    timeseries: Vec<f64>,
 }
 
 /// Types of ngrams returned by the API
@@ -155,11 +154,18 @@ fn parse(cfg: &Cfg, items: Vec<NgramItem>) -> Result<Vec<crate::Row>, Box<dyn st
                 crate::After
             };
 
+            let freq = if item.timeseries.is_empty() {
+                0.0
+            } else {
+                item.timeseries.iter().sum::<f64>() / item.timeseries.len() as f64
+            };
+
             Ok(crate::Row {
                 fam,
                 alt: matched_alt.raw.clone(),
                 side,
                 ctx: context.to_string(),
+                freq,
             })
         })
         .collect()

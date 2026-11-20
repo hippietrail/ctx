@@ -84,20 +84,20 @@ impl AlternativeMap {
         &self,
         side: crate::Side,
         dict: &FstDictionary,
-    ) -> HashMap<&'static Pos, HashMap<String, usize>> {
+    ) -> HashMap<&'static Pos, HashMap<String, f64>> {
         self.values()
             .filter_map(|side_map| side_map.get(&side))
             .flat_map(|ctx_set| ctx_set.iter())
-            .flat_map(|(word, pos_set)| {
+            .flat_map(|(word, entry)| {
                 let (_, canonical) = get_canon_case(dict, word);
-                pos_set.iter().map(move |&pos| (pos, canonical.clone()))
+                let freq = entry.freq;
+                entry
+                    .poses
+                    .iter()
+                    .map(move |&pos| (pos, canonical.clone(), freq))
             })
-            .fold(HashMap::new(), |mut acc, (pos, canonical)| {
-                acc.entry(pos)
-                    .or_default()
-                    .entry(canonical)
-                    .and_modify(|count| *count += 1)
-                    .or_insert(1);
+            .fold(HashMap::new(), |mut acc, (pos, canonical, freq)| {
+                *acc.entry(pos).or_default().entry(canonical).or_insert(0.0) += freq;
                 acc
             })
     }
@@ -108,16 +108,13 @@ impl AlternativeMap {
         &self,
         side: crate::Side,
         dict: &FstDictionary,
-    ) -> HashMap<String, usize> {
+    ) -> HashMap<String, f64> {
         let mut counts = HashMap::new();
         for side_map in self.values() {
             if let Some(ctx_set) = side_map.get(&side) {
-                let mut seen_in_alt = HashSet::new();
-                for word in ctx_set.keys() {
+                for (word, entry) in ctx_set.iter() {
                     let (_, canonical) = get_canon_case(dict, word);
-                    if seen_in_alt.insert(canonical.clone()) {
-                        *counts.entry(canonical).or_insert(0) += 1;
-                    }
+                    *counts.entry(canonical).or_insert(0.0) += entry.freq;
                 }
             }
         }
@@ -143,7 +140,13 @@ impl SideMap {
 }
 
 #[derive(Debug, Default)]
-pub struct ContextSet(pub HashMap<String, HashSet<&'static Pos>>);
+pub struct ContextEntry {
+    pub poses: HashSet<&'static Pos>,
+    pub freq: f64,
+}
+
+#[derive(Debug, Default)]
+pub struct ContextSet(pub HashMap<String, ContextEntry>);
 
 impl ContextSet {
     pub fn contexts(&self) -> HashSet<String> {
@@ -152,7 +155,7 @@ impl ContextSet {
 
     pub fn all_poses(&self) -> HashSet<&'static Pos> {
         self.values()
-            .flat_map(|pos_set| pos_set.iter().copied())
+            .flat_map(|entry| entry.poses.iter().copied())
             .collect()
     }
 }
@@ -197,11 +200,12 @@ impl DerefMut for SideMap {
 }
 
 impl Deref for ContextSet {
-    type Target = HashMap<String, HashSet<&'static Pos>>;
+    type Target = HashMap<String, ContextEntry>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
+
 impl DerefMut for ContextSet {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0

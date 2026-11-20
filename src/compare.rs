@@ -104,52 +104,59 @@ pub fn compare_two(dict: &FstDictionary, tree: FamilyTree, cfg: &Cfg) {
             let word_counts_a = fam_a.word_counts_for_side(side_variant, dict);
             let word_counts_b = fam_b.word_counts_for_side(side_variant, dict);
 
-            let words_a = word_intersection
-                .iter()
-                .map(|low_word| {
-                    let display_word = get_raw_input_word(low_word);
-                    let canon = get_correct_capitalization_of_string(dict, &display_word);
-                    let count = word_counts_a
-                        .get(&canon)
-                        .or_else(|| word_counts_a.get(&display_word))
-                        .or_else(|| word_counts_a.get(low_word))
-                        .copied()
-                        .unwrap_or(1);
-                    (canon, count)
-                })
-                .sorted_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)))
-                .map(|(word, count)| format_pos_w_count(&word, &count))
+            let collect_sorted = |counts: &HashMap<String, f64>| -> Vec<(String, f64)> {
+                word_intersection
+                    .iter()
+                    .map(|low_word| {
+                        let display_word = get_raw_input_word(low_word);
+                        let canon = get_correct_capitalization_of_string(dict, &display_word);
+                        let freq = counts
+                            .get(&canon)
+                            .or_else(|| counts.get(&display_word))
+                            .or_else(|| counts.get(low_word))
+                            .copied()
+                            .unwrap_or(0.0);
+                        (canon, freq)
+                    })
+                    .sorted_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)))
+                    .collect()
+            };
+
+            let list_a = collect_sorted(&word_counts_a);
+            let list_b = collect_sorted(&word_counts_b);
+
+            let max_freq = list_a
+                .first()
+                .map(|x| x.1)
+                .unwrap_or(0.0)
+                .max(list_b.first().map(|x| x.1).unwrap_or(0.0));
+
+            let words_a = list_a
+                .into_iter()
+                .map(|(word, freq)| format_pos_w_count(&word, freq, max_freq))
                 .collect::<Vec<_>>()
                 .join(" ");
 
-            let words_b = word_intersection
-                .iter()
-                .map(|low_word| {
-                    let display_word = get_raw_input_word(low_word);
-                    let canon = get_correct_capitalization_of_string(dict, &display_word);
-                    let count = word_counts_b
-                        .get(&canon)
-                        .or_else(|| word_counts_b.get(&display_word))
-                        .or_else(|| word_counts_b.get(low_word))
-                        .copied()
-                        .unwrap_or(1);
-                    (canon, count)
-                })
-                .sorted_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)))
-                .map(|(word, count)| format_pos_w_count(&word, &count))
+            let words_b = list_b
+                .into_iter()
+                .map(|(word, freq)| format_pos_w_count(&word, freq, max_freq))
                 .collect::<Vec<_>>()
                 .join(" ");
 
             let output = match side_variant {
                 crate::Side::Before => format!(
                     " {label} common : [{} : {}] vs [{} : {}]",
-                    words_a, fam_name_a.c(ORANGE),
-                    words_b, fam_name_b.c(RED)
+                    words_a,
+                    fam_name_a.c(ORANGE),
+                    words_b,
+                    fam_name_b.c(RED)
                 ),
                 crate::Side::After => format!(
                     " {label} common : [{} : {}] vs [{} : {}]",
-                    fam_name_a.c(ORANGE), words_a,
-                    fam_name_b.c(RED), words_b
+                    fam_name_a.c(ORANGE),
+                    words_a,
+                    fam_name_b.c(RED),
+                    words_b
                 ),
             };
 
@@ -168,23 +175,32 @@ pub fn compare_two(dict: &FstDictionary, tree: FamilyTree, cfg: &Cfg) {
         // 2. Compute differences and intersections
         let pos_diff_a: HashSet<&'static Pos> = pos_set_a.difference(&pos_set_b).copied().collect();
         let pos_diff_b: HashSet<&'static Pos> = pos_set_b.difference(&pos_set_a).copied().collect();
-        let pos_intersection: HashSet<&'static Pos> = pos_set_a.intersection(&pos_set_b).copied().collect();
+        let pos_intersection: HashSet<&'static Pos> =
+            pos_set_a.intersection(&pos_set_b).copied().collect();
 
         println!("=== {} {} ===", label.c(side_color), "POS".c(pos_colour));
 
+        let top_words_for = |words_map: Option<&HashMap<String, f64>>| -> Vec<(String, f64)> {
+            let Some(map) = words_map else {
+                return Vec::new();
+            };
+            map.iter()
+                .sorted_by(|a, b| b.1.total_cmp(a.1).then_with(|| a.0.cmp(b.0)))
+                .take(3)
+                .map(|(word, &freq)| (word.clone(), freq))
+                .collect()
+        };
+
         let print_top_words =
-
-            |pos, words_map: Option<&HashMap<String, usize>>, fam_name: &str, color| {
-                let words = match words_map {
-                    Some(m) if !m.is_empty() => m,
-                    _ => return, // Skip if None or empty
-                };
-
-                let words_str = words
-                    .iter()
-                    .sorted_by(|a, b| b.1.cmp(a.1)) // Sort by count descending
-                    .take(3)
-                    .map(|(word, count)| format_pos_w_count(word, count))
+            |pos, words_map: Option<&HashMap<String, f64>>, fam_name: &str, color| {
+                let top = top_words_for(words_map);
+                if top.is_empty() {
+                    return;
+                }
+                let max_freq = top[0].1;
+                let words_str = top
+                    .into_iter()
+                    .map(|(word, freq)| format_pos_w_count(&word, freq, max_freq))
                     .collect::<Vec<_>>()
                     .join(" ");
 
@@ -210,34 +226,41 @@ pub fn compare_two(dict: &FstDictionary, tree: FamilyTree, cfg: &Cfg) {
                 let info = pos_info(pos);
                 let pos_label = format!("{}{}", info.emoji, info.letter);
 
-                // Format helper for the word subsets
-                let get_words_str = |words_map: Option<&HashMap<String, usize>>| -> Option<String> {
-                    let map = words_map?;
-                    if map.is_empty() { return None; }
-                    
-                    Some(map
-                        .iter()
-                        .sorted_by(|a, b| b.1.cmp(a.1))
-                        .take(3)
-                        .map(|(word, count)| format_pos_w_count(word, count))
-                        .collect::<Vec<_>>()
-                        .join(" "))
-                };
+                let top_a = top_words_for(pos_counts_a.get(pos));
+                let top_b = top_words_for(pos_counts_b.get(pos));
+                let max_freq = top_a
+                    .first()
+                    .map(|x| x.1)
+                    .unwrap_or(0.0)
+                    .max(top_b.first().map(|x| x.1).unwrap_or(0.0));
 
-                let words_a = get_words_str(pos_counts_a.get(pos)).unwrap_or_default();
-                let words_b = get_words_str(pos_counts_b.get(pos)).unwrap_or_default();
+                let words_a = top_a
+                    .into_iter()
+                    .map(|(word, freq)| format_pos_w_count(&word, freq, max_freq))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+
+                let words_b = top_b
+                    .into_iter()
+                    .map(|(word, freq)| format_pos_w_count(&word, freq, max_freq))
+                    .collect::<Vec<_>>()
+                    .join(" ");
 
                 // Construct unified single-line outputs depending on side layout
                 let output = match side_variant {
                     crate::Side::Before => format!(
                         " {pos_label} : [{} : {}] vs [{} : {}]",
-                        words_a, fam_name_a.c(ORANGE),
-                        words_b, fam_name_b.c(RED)
+                        words_a,
+                        fam_name_a.c(ORANGE),
+                        words_b,
+                        fam_name_b.c(RED)
                     ),
                     crate::Side::After => format!(
                         " {pos_label} : [{} : {}] vs [{} : {}]",
-                        fam_name_a.c(ORANGE), words_a,
-                        fam_name_b.c(RED), words_b
+                        fam_name_a.c(ORANGE),
+                        words_a,
+                        fam_name_b.c(RED),
+                        words_b
                     ),
                 };
 
@@ -429,13 +452,30 @@ pub fn compare_three(dict: &FstDictionary, tree: FamilyTree, cfg: &Cfg) {
     analyze_side("RIGHT", crate::Side::After);
 }
 
-fn format_pos_w_count(word: &str, count: &usize) -> String {
+fn format_pos_w_count(word: &str, freq: f64, max_freq: f64) -> String {
     const SUPERSCRIPTS: [char; 10] = ['⁰', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹'];
 
-    let superscript = count
-        .to_string()
+    let score = if max_freq > 0.0 {
+        (freq / max_freq) * 100.0
+    } else {
+        0.0
+    };
+
+    let mut formatted = format!("{score:.2}");
+    if formatted.contains('.') {
+        formatted = formatted
+            .trim_end_matches('0')
+            .trim_end_matches('.')
+            .to_string();
+    }
+
+    let superscript = formatted
         .chars()
-        .map(|c| SUPERSCRIPTS[(c as usize) - ('0' as usize)])
+        .map(|c| match c {
+            '0'..='9' => SUPERSCRIPTS[(c as usize) - ('0' as usize)],
+            '.' => '˙',
+            other => other,
+        })
         .collect::<String>();
 
     format!("{word}{superscript}")
