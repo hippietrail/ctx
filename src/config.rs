@@ -20,6 +20,7 @@ pub struct Cfg {
     pub expand_families: bool,
     pub common_words: bool,
     pub common_pos: bool,
+    pub raw_tokens: bool,
 }
 
 impl Cfg {
@@ -96,6 +97,7 @@ pub fn cli() -> Result<Cfg, Box<dyn std::error::Error>> {
         expand_families: false,
         common_words: false,
         common_pos: true,
+        raw_tokens: false,
     };
 
     let mut family = None;
@@ -163,6 +165,10 @@ pub fn cli() -> Result<Cfg, Box<dyn std::error::Error>> {
             cfg.common_pos = true;
         } else if arg == "--no-common-pos" {
             cfg.common_pos = false;
+        } else if arg == "--raw-tokens" {
+            cfg.raw_tokens = true;
+        } else if arg == "--no-raw-tokens" {
+            cfg.raw_tokens = false;
         } else if arg.starts_with('-') {
             return Err(format!("Unknown option: {}", arg).into());
         } else {
