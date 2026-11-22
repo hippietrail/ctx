@@ -5,6 +5,7 @@
 // Local modules
 
 // Standard library
+use std::collections::HashSet;
 
 // External crates
 use serde::Deserialize;
@@ -106,7 +107,9 @@ pub fn fetch_json(url: url::Url) -> Result<serde_json::Value, Box<dyn std::error
 /// A vector of general `crate::Row` structs containing the family, alternative,
 /// side, and context data.
 fn parse(cfg: &Cfg, items: Vec<NgramItem>) -> Result<Vec<crate::Row>, Box<dyn std::error::Error>> {
-    items
+    let mut seen_bases: HashSet<String> = HashSet::new();
+
+    let rows: Vec<crate::Row> = items
         .into_iter()
         .filter(|item| {
             item.kind == NgramType::Expansion
@@ -140,6 +143,8 @@ fn parse(cfg: &Cfg, items: Vec<NgramItem>) -> Result<Vec<crate::Row>, Box<dyn st
                 }
             };
 
+            seen_bases.insert(matched_alt.raw.to_lowercase());
+
             let fam = matched_alt.fam.clone();
 
             let context = if is_prefix {
@@ -168,7 +173,18 @@ fn parse(cfg: &Cfg, items: Vec<NgramItem>) -> Result<Vec<crate::Row>, Box<dyn st
                 freq,
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
+
+    // Warn once per base term if none of its case variants produced any expansion hits
+    let mut warned_bases: HashSet<String> = HashSet::new();
+    for alt in &cfg.alternatives {
+        let base = alt.raw.to_lowercase();
+        if !seen_bases.contains(&base) && warned_bases.insert(base.clone()) {
+            eprintln!("⚠️ Zero Ngram hits for: \"{}\"", base);
+        }
+    }
+
+    Ok(rows)
 }
 
 pub fn fetch_google_ngrams(cfg: &Cfg) -> Result<Vec<crate::Row>, Box<dyn std::error::Error>> {
