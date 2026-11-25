@@ -1,4 +1,4 @@
-mod three_way;
+mod n_way;
 mod two_way;
 
 // 1. Standard Library Imports
@@ -12,7 +12,7 @@ use itertools::Itertools;
 use crate::colour::Colour;
 
 // 4. Re-exports
-pub use three_way::compare_n;
+pub use n_way::compare_n;
 pub use two_way::compare_two;
 
 fn format_pos_w_count(word: &str, freq: f64, max_freq: f64) -> String {

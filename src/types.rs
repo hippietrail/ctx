@@ -56,13 +56,6 @@ impl AlternativeMap {
         set
     }
 
-    /// Parameterized method to collect unique POS references for a specific side.
-    pub fn poses_for_side(&self, side: crate::Side) -> HashSet<&'static Pos> {
-        self.values()
-            .flat_map(|side_map| side_map.poses_for_side(side))
-            .collect()
-    }
-
     /// Builds a counting structure: POS → (canonical word → occurrence count)
     /// This counts how many times each word appears with each POS across all alternatives,
     /// using canonicalized spelling to merge case variants.
@@ -117,12 +110,6 @@ impl SideMap {
             .map(|ctx_set| ctx_set.contexts())
             .unwrap_or_default()
     }
-
-    pub fn poses_for_side(&self, side: crate::Side) -> HashSet<&'static Pos> {
-        self.get(&side)
-            .map(|ctx_set| ctx_set.all_poses())
-            .unwrap_or_default()
-    }
 }
 
 #[derive(Debug, Default)]
@@ -137,12 +124,6 @@ pub struct ContextSet(pub HashMap<String, ContextEntry>);
 impl ContextSet {
     pub fn contexts(&self) -> HashSet<String> {
         self.keys().cloned().collect()
-    }
-
-    pub fn all_poses(&self) -> HashSet<&'static Pos> {
-        self.values()
-            .flat_map(|entry| entry.poses.iter().copied())
-            .collect()
     }
 }
 

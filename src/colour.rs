@@ -19,7 +19,7 @@ pub trait Colour {
     fn _tc(&self, r: u8, g: u8, b: u8) -> FgDynColorDisplay<'_, Rgb, Self>;
     fn c(&self, rgb: (u8, u8, u8)) -> FgDynColorDisplay<'_, Rgb, Self>;
     // bold
-    fn b(&self) -> BoldDisplay<'_, Self>;
+    fn _b(&self) -> BoldDisplay<'_, Self>;
     // dim
     fn d(&self) -> DimDisplay<'_, Self>;
     // italic
@@ -39,7 +39,7 @@ impl<T: OwoColorize> Colour for T {
     }
 
     #[inline(always)]
-    fn b(&self) -> BoldDisplay<'_, Self> {
+    fn _b(&self) -> BoldDisplay<'_, Self> {
         self.bold()
     }
 

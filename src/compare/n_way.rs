@@ -88,13 +88,7 @@ pub fn compare_n(dict: &FstDictionary, tree: FamilyTree, cfg: &Cfg) {
             if exclusive[i].is_empty() {
                 continue;
             }
-            let diff_str = format_word_diff(
-                &exclusive[i],
-                &orig_sets[i],
-                &all_orig,
-                dict,
-                *color,
-            );
+            let diff_str = format_word_diff(&exclusive[i], &orig_sets[i], &all_orig, dict, *color);
             println!(" {label} {}: {}", name.c(*color), diff_str);
         }
 
