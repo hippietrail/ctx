@@ -29,31 +29,17 @@ fn get_canon_case(dict: &FstDictionary, s: &str) -> (bool, String) {
 pub struct FamilyTree(pub HashMap<Option<String>, AlternativeMap>);
 
 impl FamilyTree {
-    /// Extracts two families in sorted order and returns both the sorted keys and families.
-    /// This ensures consistent ordering across runs.
-    pub fn into_two_families_sorted(
-        mut self,
-    ) -> (Vec<Option<String>>, AlternativeMap, AlternativeMap) {
+    /// Extracts all families in sorted key order.
+    pub fn into_families_sorted(mut self) -> Vec<(String, AlternativeMap)> {
         let mut keys: Vec<Option<String>> = self.0.keys().cloned().collect();
         keys.sort();
-        let fam_a = self.0.remove(&keys[0]).unwrap();
-        let fam_b = self.0.remove(&keys[1]).unwrap();
-        (keys, fam_a, fam_b)
-    }
-    pub fn into_three_families_sorted(
-        mut self,
-    ) -> (
-        Vec<Option<String>>,
-        AlternativeMap,
-        AlternativeMap,
-        AlternativeMap,
-    ) {
-        let mut keys: Vec<Option<String>> = self.0.keys().cloned().collect();
-        keys.sort();
-        let fam_a = self.0.remove(&keys[0]).unwrap();
-        let fam_b = self.0.remove(&keys[1]).unwrap();
-        let fam_c = self.0.remove(&keys[2]).unwrap();
-        (keys, fam_a, fam_b, fam_c)
+        keys.into_iter()
+            .map(|k| {
+                let map = self.0.remove(&k).unwrap();
+                let name = k.unwrap_or_else(|| "None".to_string());
+                (name, map)
+            })
+            .collect()
     }
 }
 
@@ -68,13 +54,6 @@ impl AlternativeMap {
             set.extend(side_map.contexts_for_side(side));
         }
         set
-    }
-
-    /// Parameterized method to collect unique POS references for a specific side.
-    pub fn poses_for_side(&self, side: crate::Side) -> HashSet<&'static Pos> {
-        self.values()
-            .flat_map(|side_map| side_map.poses_for_side(side))
-            .collect()
     }
 
     /// Builds a counting structure: POS → (canonical word → occurrence count)
@@ -131,12 +110,6 @@ impl SideMap {
             .map(|ctx_set| ctx_set.contexts())
             .unwrap_or_default()
     }
-
-    pub fn poses_for_side(&self, side: crate::Side) -> HashSet<&'static Pos> {
-        self.get(&side)
-            .map(|ctx_set| ctx_set.all_poses())
-            .unwrap_or_default()
-    }
 }
 
 #[derive(Debug, Default)]
@@ -151,12 +124,6 @@ pub struct ContextSet(pub HashMap<String, ContextEntry>);
 impl ContextSet {
     pub fn contexts(&self) -> HashSet<String> {
         self.keys().cloned().collect()
-    }
-
-    pub fn all_poses(&self) -> HashSet<&'static Pos> {
-        self.values()
-            .flat_map(|entry| entry.poses.iter().copied())
-            .collect()
     }
 }
 

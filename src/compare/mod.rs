@@ -1,4 +1,4 @@
-mod three_way;
+mod n_way;
 mod two_way;
 
 // 1. Standard Library Imports
@@ -12,7 +12,7 @@ use itertools::Itertools;
 use crate::colour::Colour;
 
 // 4. Re-exports
-pub use three_way::compare_three;
+pub use n_way::compare_n;
 pub use two_way::compare_two;
 
 fn format_pos_w_count(word: &str, freq: f64, max_freq: f64) -> String {
@@ -115,4 +115,15 @@ pub fn format_side_comparison(
             b.words
         ),
     }
+}
+
+pub fn format_n_side_comparison(side: crate::Side, prefix: &str, cols: &[SideCol<'_>]) -> String {
+    let joined = cols
+        .iter()
+        .map(|col| match side {
+            crate::Side::Before => format!("[{} : {}]", col.words, col.fam.c(col.color)),
+            crate::Side::After => format!("[{} : {}]", col.fam.c(col.color), col.words),
+        })
+        .join(" vs ");
+    format!(" {prefix} : {joined}")
 }
