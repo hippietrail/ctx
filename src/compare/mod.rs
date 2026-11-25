@@ -36,7 +36,7 @@ fn format_pos_w_count(word: &str, freq: f64, max_freq: f64) -> String {
         .chars()
         .map(|c| match c {
             '0'..='9' => SUPERSCRIPTS[(c as usize) - ('0' as usize)],
-            '.' => '˙',
+            '.' => '·',
             other => other,
         })
         .collect::<String>();
