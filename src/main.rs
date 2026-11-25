@@ -56,7 +56,7 @@ use std::vec::Vec;
 use harper_core::spell::{Dictionary, FstDictionary};
 
 // 3. Local Module Imports (Now valid because the modules are declared above)
-use compare::{compare_three, compare_two};
+use compare::{compare_n, compare_two};
 use pos::{Pos, PosLookupResult};
 use types::FamilyTree;
 
@@ -197,12 +197,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match tree.len() {
         2 => compare_two(&dict, tree, &cfg),
-        3 => compare_three(&dict, tree, &cfg),
-        _ => {
-            println!(
-                "Tree size must be exactly 2 or 3 to run analysis, but got {}",
-                tree.len()
-            );
+        n if n >= 3 => compare_n(&dict, tree, &cfg),
+        n => {
+            println!("Tree size must be at least 2 to run analysis, but got {n}");
         }
     }
 

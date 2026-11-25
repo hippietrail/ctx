@@ -18,9 +18,11 @@ use crate::{
 };
 
 pub fn compare_two(dict: &FstDictionary, tree: FamilyTree, cfg: &Cfg) {
-    let (family_keys, fam_a, fam_b) = tree.into_two_families_sorted();
-    let fam_name_a = family_keys[0].as_deref().unwrap_or("None");
-    let fam_name_b = family_keys[1].as_deref().unwrap_or("None");
+    let mut families = tree.into_families_sorted();
+    let (fam_name_a, fam_a) = families.remove(0);
+    let (fam_name_b, fam_b) = families.remove(0);
+
+    let (fam_name_a, fam_name_b) = (fam_name_a.as_str(), fam_name_b.as_str());
 
     println!("“{}” vs. “{}”", fam_name_a.c(ORANGE), fam_name_b.c(RED));
 

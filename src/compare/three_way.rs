@@ -1,189 +1,256 @@
 // 1. Standard Library Imports
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 // 2. External Crate Imports
-use harper_core::spell::{Dictionary, FstDictionary};
+use harper_core::spell::FstDictionary;
 use itertools::Itertools;
 
 // 3. Local Crate Imports
 use crate::{
     colour::{BLUE, CYAN, Colour, GREEN, MAGENTA, ORANGE, RED, YELLOW},
-    compare::get_correct_capitalization_of_string,
+    compare::{
+        SideCol, format_n_side_comparison, format_pos_w_count, format_word_diff,
+        get_correct_capitalization_of_string, is_meaningful_word,
+    },
     config::Cfg,
-    pos::Pos,
+    pos::{Pos, pos_info},
     types::FamilyTree,
 };
 
-pub fn compare_three(dict: &FstDictionary, tree: FamilyTree, cfg: &Cfg) {
-    // 1. Extract family names and their corresponding AlternativeMaps in sorted order
-    let (family_keys, fam_a, fam_b, fam_c) = tree.into_three_families_sorted();
-    let fam_name_a = family_keys[0].as_deref().unwrap_or("None");
-    let fam_name_b = family_keys[1].as_deref().unwrap_or("None");
-    let fam_name_c = family_keys[2].as_deref().unwrap_or("None");
+const PALETTE: &[(u8, u8, u8)] = &[ORANGE, RED, BLUE, GREEN, MAGENTA, CYAN];
 
-    println!(
-        "“{}” vs. “{}” vs. “{}”",
-        fam_name_a.c(ORANGE),
-        fam_name_b.c(RED),
-        fam_name_c.c(BLUE)
-    );
+pub fn compare_n(dict: &FstDictionary, tree: FamilyTree, cfg: &Cfg) {
+    let raw_families = tree.into_families_sorted();
+    let n = raw_families.len();
 
-    // 2. The unified reusable analysis pipeline closure
-    let analyze_side = |label: &str, side_variant: crate::Side| {
-        // Keep the exact case variants as they came out of the text data
-        let original_set_a = fam_a.contexts_for_side(side_variant);
-        let original_set_b = fam_b.contexts_for_side(side_variant);
-        let original_set_c = fam_c.contexts_for_side(side_variant);
+    let families: Vec<(String, _, (u8, u8, u8))> = raw_families
+        .into_iter()
+        .enumerate()
+        .map(|(i, (name, map))| (name, map, PALETTE[i % PALETTE.len()]))
+        .collect();
 
-        // Construct case-insensitive tracking sets so case variants merge for set arithmetic
-        let word_set_a: HashSet<String> = original_set_a.iter().map(|s| s.to_lowercase()).collect();
-        let word_set_b: HashSet<String> = original_set_b.iter().map(|s| s.to_lowercase()).collect();
-        let word_set_c: HashSet<String> = original_set_c.iter().map(|s| s.to_lowercase()).collect();
+    let header = families
+        .iter()
+        .map(|(name, _, color)| format!("“{}”", name.c(*color)))
+        .join(" vs. ");
+    println!("{header}");
 
-        let (word_color, pos_colour) = (YELLOW, MAGENTA);
+    let analyze_side = |side_variant: crate::Side, label: &str| {
         let side_color = [GREEN, CYAN][side_variant as usize];
-        println!("=== {} {} ===", label.c(side_color), "WORDS".c(word_color));
+        println!("=== {} {} ===", label.c(side_color), "WORDS".c(YELLOW));
 
-        // Calculate unions for comparison
-        let union_bc: HashSet<String> = word_set_b.union(&word_set_c).cloned().collect();
-        let union_ac: HashSet<String> = word_set_a.union(&word_set_c).cloned().collect();
-        let union_ab: HashSet<String> = word_set_a.union(&word_set_b).cloned().collect();
+        // 1. Collect original-case and lowercased sets per family
+        let mut orig_sets: Vec<HashSet<String>> = Vec::with_capacity(n);
+        let mut lower_sets: Vec<HashSet<String>> = Vec::with_capacity(n);
 
-        // Calculate unique sets: words in one family but not in the union of the other two
-        let unique_a: HashSet<String> = word_set_a.difference(&union_bc).cloned().collect();
-        let unique_b: HashSet<String> = word_set_b.difference(&union_ac).cloned().collect();
-        let unique_c: HashSet<String> = word_set_c.difference(&union_ab).cloned().collect();
+        for (_, fam_map, _) in &families {
+            let mut orig = fam_map.contexts_for_side(side_variant);
+            if !cfg.raw_tokens {
+                orig.retain(|w| is_meaningful_word(w));
+            }
+            let lower = orig.iter().map(|s| s.to_lowercase()).collect();
+            orig_sets.push(orig);
+            lower_sets.push(lower);
+        }
 
-        // Calculate intersection of all three
-        let intersection_all: HashSet<String> = word_set_a
-            .intersection(&word_set_b)
-            .cloned()
-            .collect::<HashSet<String>>()
-            .intersection(&word_set_c)
-            .cloned()
+        // Combined original-case lookup across all families
+        let all_orig: HashSet<String> = orig_sets.iter().flatten().cloned().collect();
+        let empty_set = HashSet::new();
+
+        // 2. Map every unique lowercase word to the bitmask (or Vec<usize>) of families containing it
+        let mut word_owners: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        for (idx, set) in lower_sets.iter().enumerate() {
+            for word in set {
+                word_owners.entry(word.clone()).or_default().push(idx);
+            }
+        }
+
+        // Partition words into:
+        // - exclusive[i]: only in family i
+        // - partial[owners]: in 2..n families
+        // - common_all: in all n families
+        let mut exclusive: Vec<HashSet<String>> = vec![HashSet::new(); n];
+        let mut partial: BTreeMap<Vec<usize>, HashSet<String>> = BTreeMap::new();
+        let mut common_all: HashSet<String> = HashSet::new();
+
+        for (word, owners) in word_owners {
+            if owners.len() == 1 {
+                exclusive[owners[0]].insert(word);
+            } else if owners.len() == n {
+                common_all.insert(word);
+            } else {
+                partial.entry(owners).or_default().insert(word);
+            }
+        }
+
+        // Print exclusive words per family (matching compare_two style)
+        for (i, (name, _, color)) in families.iter().enumerate() {
+            if exclusive[i].is_empty() {
+                continue;
+            }
+            let diff_str = format_word_diff(
+                &exclusive[i],
+                &orig_sets[i],
+                &all_orig,
+                dict,
+                *color,
+            );
+            println!(" {label} {}: {}", name.c(*color), diff_str);
+        }
+
+        // Print partial overlaps (2..n families) so pairwise battleground words aren't lost!
+        for (owners, words) in &partial {
+            let subset_label = owners
+                .iter()
+                .map(|&idx| format!("{}", families[idx].0.c(families[idx].2)))
+                .join(" + ");
+            let diff_str = format_word_diff(words, &all_orig, &empty_set, dict, YELLOW);
+            println!(" {label} [{subset_label}]: {diff_str}");
+        }
+
+        // Print words common to all N families with superscript relative frequencies
+        if cfg.common_words && !common_all.is_empty() {
+            let counts_per_fam: Vec<HashMap<String, f64>> = families
+                .iter()
+                .map(|(_, fam_map, _)| fam_map.word_counts_for_side(side_variant, dict))
+                .collect();
+
+            let lists: Vec<Vec<(String, f64)>> = counts_per_fam
+                .iter()
+                .map(|counts| {
+                    common_all
+                        .iter()
+                        .map(|low_word| {
+                            let display_word = all_orig
+                                .get(low_word)
+                                .map(String::as_str)
+                                .unwrap_or(low_word);
+                            let canon = get_correct_capitalization_of_string(dict, display_word);
+                            let freq = counts
+                                .get(&canon)
+                                .or_else(|| counts.get(display_word))
+                                .or_else(|| counts.get(low_word))
+                                .copied()
+                                .unwrap_or(0.0);
+                            (canon, freq)
+                        })
+                        .sorted_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)))
+                        .collect()
+                })
+                .collect();
+
+            let max_freq = lists
+                .iter()
+                .filter_map(|l| l.first().map(|x| x.1))
+                .fold(0.0_f64, f64::max);
+
+            let rendered_words: Vec<String> = lists
+                .into_iter()
+                .map(|list| {
+                    list.into_iter()
+                        .map(|(word, freq)| format_pos_w_count(&word, freq, max_freq))
+                        .join(" ")
+                })
+                .collect();
+
+            let cols: Vec<SideCol<'_>> = families
+                .iter()
+                .zip(rendered_words.iter())
+                .map(|((name, _, color), words)| SideCol {
+                    words,
+                    fam: name,
+                    color: *color,
+                })
+                .collect();
+
+            let output = format_n_side_comparison(side_variant, &format!("{label} common"), &cols);
+            println!("{}", output.c(BLUE));
+        }
+
+        // --- Parts of Speech (POS) Processing ---
+        println!("=== {} {} ===", label.c(side_color), "POS".c(MAGENTA));
+
+        let pos_counts: Vec<HashMap<&'static Pos, HashMap<String, f64>>> = families
+            .iter()
+            .map(|(_, fam_map, _)| fam_map.pos_to_word_counts_for_side(side_variant, dict))
             .collect();
 
-        // Helper to pull the true original case variant out of the source text data
-        let get_raw_input_word = |lowercase_word: &str| -> String {
-            if let Some(orig) = original_set_a.get(lowercase_word) {
-                return orig.clone();
+        let mut pos_owners: BTreeMap<&'static Pos, Vec<usize>> = BTreeMap::new();
+        for (idx, map) in pos_counts.iter().enumerate() {
+            for &pos in map.keys() {
+                pos_owners.entry(pos).or_default().push(idx);
             }
-            if let Some(orig) = original_set_b.get(lowercase_word) {
-                return orig.clone();
-            }
-            if let Some(orig) = original_set_c.get(lowercase_word) {
-                return orig.clone();
-            }
-            lowercase_word.to_string()
+        }
+
+        let top_words_for = |words_map: Option<&HashMap<String, f64>>| -> Vec<(String, f64)> {
+            let Some(map) = words_map else {
+                return Vec::new();
+            };
+            map.iter()
+                .sorted_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)))
+                .take(3)
+                .map(|(word, &freq)| (word.clone(), freq))
+                .collect()
         };
 
-        let mut combined_pos = Vec::new();
+        for (pos, owners) in pos_owners {
+            let info = pos_info(pos);
+            let pos_label = format!("{}{}", info.emoji, info.letter);
 
-        // Group 1: Unique to A (Words only in A, not in B or C)
-        for low_word in unique_a.iter().sorted() {
-            let display_word = get_raw_input_word(low_word);
-            let is_oov = dict.get_word_metadata_str(&display_word).is_none();
-            let canonical_word = get_correct_capitalization_of_string(dict, &display_word);
-
-            let formatted = if is_oov {
-                format!("{}", canonical_word.d().c(ORANGE))
-            } else {
-                format!("{}", canonical_word.c(ORANGE))
-            };
-            combined_pos.push(formatted);
-        }
-
-        // Group 2: Unique to B (Words only in B, not in A or C)
-        for low_word in unique_b.iter().sorted() {
-            let display_word = get_raw_input_word(low_word);
-            let is_oov = dict.get_word_metadata_str(&display_word).is_none();
-            let canonical_word = get_correct_capitalization_of_string(dict, &display_word);
-
-            let formatted = if is_oov {
-                format!("{}", canonical_word.d().c(RED))
-            } else {
-                format!("{}", canonical_word.c(RED))
-            };
-            combined_pos.push(formatted);
-        }
-
-        // Group 3: Unique to C (Words only in C, not in A or B)
-        for low_word in unique_c.iter().sorted() {
-            let display_word = get_raw_input_word(low_word);
-            let is_oov = dict.get_word_metadata_str(&display_word).is_none();
-            let canonical_word = get_correct_capitalization_of_string(dict, &display_word);
-
-            let formatted = if is_oov {
-                format!("{}", canonical_word.d().c(BLUE))
-            } else {
-                format!("{}", canonical_word.c(BLUE))
-            };
-            combined_pos.push(formatted);
-        }
-
-        // Group 4: Shared by all three
-        if cfg.common_words {
-            for low_word in intersection_all.iter().sorted() {
-                let display_word = get_raw_input_word(low_word);
-                let is_oov = dict.get_word_metadata_str(&display_word).is_none();
-                let canonical_word = get_correct_capitalization_of_string(dict, &display_word);
-
-                let formatted = if is_oov {
-                    format!("{}", canonical_word.d().b())
-                } else {
-                    format!("{}", canonical_word.b())
-                };
-                combined_pos.push(formatted);
-            }
-        }
-        println!(" 🗂️ {}", combined_pos.join(", "));
-
-        // --- Parts of Speech (Pos) Set Processing ---
-        let pos_set_a = fam_a.poses_for_side(side_variant);
-        let pos_set_b = fam_b.poses_for_side(side_variant);
-        let pos_set_c = fam_c.poses_for_side(side_variant);
-
-        println!("=== {} {} ===", label.c(side_color), "POS".c(pos_colour));
-
-        let pos_union: HashSet<&'static Pos> = pos_set_a
-            .union(&pos_set_b)
-            .copied()
-            .collect::<HashSet<&'static Pos>>()
-            .union(&pos_set_c)
-            .copied()
-            .collect();
-
-        // POS combined with color coding
-        let mut combined = Vec::new();
-        for pos in pos_union {
-            let in_a = pos_set_a.contains(&pos);
-            let in_b = pos_set_b.contains(&pos);
-            let in_c = pos_set_c.contains(&pos);
-
-            if in_a && in_b && in_c {
-                if cfg.common_pos {
-                    combined.push(format!("\x1b[1m{:?}\x1b[0m", pos)); // Bold for pos in all three
+            if owners.len() == 1 {
+                let idx = owners[0];
+                let (name, _, color) = &families[idx];
+                let top = top_words_for(pos_counts[idx].get(pos));
+                if top.is_empty() {
+                    continue;
                 }
-            } else if in_a && in_b {
-                combined.push(format!("\x1b[33m{:?}\x1b[0m", pos)); // Yellow for pos in A and B only
-            } else if in_a && in_c {
-                combined.push(format!("\x1b[36m{:?}\x1b[0m", pos)); // Cyan for pos in A and C only
-            } else if in_b && in_c {
-                combined.push(format!("\x1b[35m{:?}\x1b[0m", pos)); // Magenta for pos in B and C only
-            } else if in_a {
-                combined.push(format!("\x1b[33m{:?}\x1b[0m", pos)); // Orange for pos only in A
-            } else if in_b {
-                combined.push(format!("\x1b[31m{:?}\x1b[0m", pos)); // Red for pos only in B
-            } else {
-                combined.push(format!("\x1b[34m{:?}\x1b[0m", pos)); // Blue for pos only in C
+                let max_freq = top[0].1;
+                let words_str = top
+                    .into_iter()
+                    .map(|(word, freq)| format_pos_w_count(&word, freq, max_freq))
+                    .join(" ");
+
+                let output = match side_variant {
+                    crate::Side::Before => format!(" {pos_label} : {words_str} : {name}"),
+                    crate::Side::After => format!(" {pos_label} : {name} : {words_str}"),
+                };
+                println!("{}", output.c(*color));
+            } else if owners.len() < n || cfg.common_pos {
+                let tops: Vec<Vec<(String, f64)>> = owners
+                    .iter()
+                    .map(|&idx| top_words_for(pos_counts[idx].get(pos)))
+                    .collect();
+
+                let max_freq = tops
+                    .iter()
+                    .filter_map(|t| t.first().map(|x| x.1))
+                    .fold(0.0_f64, f64::max);
+
+                let rendered: Vec<String> = tops
+                    .into_iter()
+                    .map(|top| {
+                        top.into_iter()
+                            .map(|(word, freq)| format_pos_w_count(&word, freq, max_freq))
+                            .join(" ")
+                    })
+                    .collect();
+
+                let cols: Vec<SideCol<'_>> = owners
+                    .iter()
+                    .zip(rendered.iter())
+                    .map(|(&idx, words)| SideCol {
+                        words,
+                        fam: &families[idx].0,
+                        color: families[idx].2,
+                    })
+                    .collect();
+
+                let output = format_n_side_comparison(side_variant, &pos_label, &cols);
+                println!("{}", output.c(BLUE));
             }
         }
-        println!("  {}", combined.join(", "));
     };
 
-    // 3. Execute everything seamlessly for the LEFT side
-    analyze_side("LEFT", crate::Side::Before);
-
-    // 4. Execute everything seamlessly for the RIGHT side
-    analyze_side("RIGHT", crate::Side::After);
+    analyze_side(crate::Side::Before, "Before");
+    analyze_side(crate::Side::After, "After");
 }
